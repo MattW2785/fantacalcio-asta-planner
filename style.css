@@ -114,8 +114,22 @@ a { color: var(--gold); }
 
 .brand {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
   line-height: 1.1;
+}
+
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  flex-shrink: 0;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
 }
 
 .brand-title {

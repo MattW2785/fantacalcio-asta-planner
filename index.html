@@ -9,11 +9,14 @@
 <meta name="apple-mobile-web-app-title" content="FantaAsta">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0B2118">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230B2118'/%3E%3Ctext x='32' y='44' font-family='Georgia, serif' font-size='36' font-weight='bold' fill='%23E3B23C' text-anchor='middle'%3EF%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/icon-16.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20260815-2">
+<link rel="stylesheet" href="style.css?v=20260815-3">
 <script>
 // Registrato il prima possibile (prima di qualunque altro script): un service worker attivo
 // e' cio' che fa uscire l'app aggiunta alla Home su iOS/iPadOS dalla cache "statica" del
@@ -46,8 +49,11 @@ if ("serviceWorker" in navigator) {
 <header class="scoreboard" id="scoreboard">
   <div class="scoreboard-inner">
     <div class="brand">
-      <span class="brand-title">FANTA<span class="brand-accent">ASTA</span></span>
-      <span class="brand-sub">Planner &middot; Serie B 26/27</span>
+      <img class="brand-mark" src="icons/icon-192.png" alt="" width="192" height="192">
+      <span class="brand-text">
+        <span class="brand-title">FANTA<span class="brand-accent">ASTA</span></span>
+        <span class="brand-sub">Planner &middot; Serie B 26/27</span>
+      </span>
     </div>
 
     <div class="scoreboard-figures">
