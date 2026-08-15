@@ -8,12 +8,27 @@
   const SLOTS_PER_ROLE = { P: 3, D: 8, C: 8, A: 6 };
   const TOTAL_SLOTS = Object.values(SLOTS_PER_ROLE).reduce((a, b) => a + b, 0); // 25
   const STORAGE_KEY = 'fanta_asta_planner_v1';
+  const SYNC_POLL_INTERVAL_MS = 8000;
 
   const DEFAULT_SETTINGS = {
     budgetTotale: 400,
     numeroSquadre: 6,
     correzionePct: 100,
     pct: { P: 12, D: 25, C: 32, A: 31 }
+  };
+
+  // Collegamento con Asta Live Fantacalcio (asta in tempo reale, app separata): quando attivo,
+  // i giocatori acquistati dalla squadra scelta vengono aggiunti automaticamente qui.
+  const DEFAULT_SYNC = {
+    baseUrl: 'https://asta-live-fantacalcio-production.up.railway.app',
+    roomCode: '',
+    teamId: null,
+    teamName: null,
+    lastSyncedAt: null,
+    lastError: null,
+    // Chiavi (nome|squadra) di giocatori sincronizzati che l'utente ha rimosso a mano dalla
+    // rosa: non vanno ri-aggiunti automaticamente al prossimo poll.
+    ignoreKeys: []
   };
 
   // Strategie di allocazione budget consigliate, selezionabili nel pannello impostazioni.
@@ -27,9 +42,10 @@
   // ---------- State ----------
   const initial = loadState();
   let settings = initial.settings;
-  let roster = initial.roster; // [{id, pricePaid}]
+  let roster = initial.roster; // [{id, pricePaid, synced?}]
   let PLAYERS_DATA = initial.players; // caricato da file Excel/CSV, nessun listone incorporato
   let playersMeta = initial.playersMeta; // { fileName, importedAt } | null
+  let sync = initial.sync; // collegamento con Asta Live (vedi DEFAULT_SYNC)
   let activeRole = 'P';
   let searchTerm = '';
   let sortKey = 'qa';
@@ -39,12 +55,19 @@
   // Giocatori realmente acquistabili (non off-limits) per ruolo, ordinati per quotazione decrescente:
   // servono per stimare quanti crediti "assorbirà" davvero ciascun reparto.
   let NON_EXCL_SORTED_BY_ROLE = { P: [], D: [], C: [], A: [] };
+  // Indice per il matching con Asta Live: chiave "nome|squadra" normalizzata -> giocatore del listone.
+  let matchIndexByKey = new Map();
 
   function rebuildDerivedIndexes() {
     playersById = new Map(PLAYERS_DATA.map(p => [p.id, p]));
     NON_EXCL_SORTED_BY_ROLE = { P: [], D: [], C: [], A: [] };
     ROLES.forEach(role => {
       NON_EXCL_SORTED_BY_ROLE[role] = PLAYERS_DATA.filter(p => p.r === role && !p.excl).sort((a, b) => b.qa - a.qa);
+    });
+    matchIndexByKey = new Map();
+    PLAYERS_DATA.forEach(p => {
+      const key = normalizeMatchKey(p.n, p.s);
+      if (!matchIndexByKey.has(key)) matchIndexByKey.set(key, p);
     });
     computeConvenienzaTiers();
   }
@@ -53,21 +76,26 @@
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null };
+      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC } };
       const parsed = JSON.parse(raw);
       return {
         settings: { ...DEFAULT_SETTINGS, ...parsed.settings, pct: { ...DEFAULT_SETTINGS.pct, ...(parsed.settings && parsed.settings.pct) } },
         roster: Array.isArray(parsed.roster) ? parsed.roster : [],
         players: Array.isArray(parsed.players) ? parsed.players : [],
-        playersMeta: parsed.playersMeta || null
+        playersMeta: parsed.playersMeta || null,
+        sync: {
+          ...DEFAULT_SYNC,
+          ...(parsed.sync || {}),
+          ignoreKeys: Array.isArray(parsed.sync && parsed.sync.ignoreKeys) ? parsed.sync.ignoreKeys : []
+        }
       };
     } catch (e) {
-      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null };
+      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC } };
     }
   }
 
   function saveState() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta, sync }));
   }
 
   // ---------- Derived calculations ----------
@@ -216,6 +244,14 @@
   }
 
   function removePlayer(id) {
+    const entry = roster.find(r => r.id === id);
+    if (entry && entry.synced) {
+      const player = playersById.get(id);
+      if (player) {
+        const key = normalizeMatchKey(player.n, player.s);
+        if (!sync.ignoreKeys.includes(key)) sync.ignoreKeys.push(key);
+      }
+    }
     roster = roster.filter(r => r.id !== id);
     saveState();
     renderAll();
@@ -509,7 +545,7 @@
         card.className = 'roster-card';
         card.innerHTML = `
           <div class="roster-card-info">
-            <div class="roster-card-name">${escapeHtml(entry.player.n)}</div>
+            <div class="roster-card-name">${escapeHtml(entry.player.n)}${entry.synced ? '<span class="synced-badge" title="Aggiunto automaticamente da Asta Live">Sync</span>' : ''}</div>
             <div class="roster-card-team">${escapeHtml(entry.player.s)}</div>
           </div>
           <div class="roster-card-actions">
@@ -560,6 +596,7 @@
     renderSettings();
     renderTable();
     renderRoster();
+    renderSyncPanel();
   }
 
   function renderImportStatus() {
@@ -829,6 +866,223 @@
     });
   }
 
+  // ---------- Sincronizzazione con Asta Live Fantacalcio ----------
+  // Matching tra le due app: Asta Live non condivide gli Id del listone ufficiale, quindi i
+  // giocatori si abbinano per nome+squadra normalizzati (stesso approccio di starters.js).
+  function normalizeMatchKey(name, team) {
+    return (String(name || '').trim() + '|' + String(team || '').trim()).toLowerCase();
+  }
+
+  // Id stabile e negativo (mai in conflitto con gli id, sempre positivi, del listone importato)
+  // per i giocatori sincronizzati da Asta Live che non trovano corrispondenza nel listone caricato.
+  function stableSyntheticId(key) {
+    let hash = 5381;
+    for (let i = 0; i < key.length; i++) {
+      hash = ((hash << 5) + hash + key.charCodeAt(i)) | 0;
+    }
+    return -Math.abs(hash) - 1;
+  }
+
+  // Inserisce/aggiorna nella rosa un giocatore risultato acquistato su Asta Live. Ignora il
+  // controllo budget/slot "morbido" usato per i giocatori aggiunti a mano: un acquisto reale in
+  // asta va sempre riflesso in rosa. Ritorna true se ha effettivamente aggiunto o aggiornato.
+  function addSyncedPlayer(role, name, realTeam, finalPrice) {
+    const key = normalizeMatchKey(name, realTeam);
+    if (sync.ignoreKeys.includes(key)) return false;
+
+    let player = matchIndexByKey.get(key);
+    if (!player) {
+      const id = stableSyntheticId(key);
+      player = playersById.get(id);
+      if (!player) {
+        player = { id, r: role, n: name, s: realTeam, qa: 0, fvm: 0, excl: false, synced: true };
+        PLAYERS_DATA.push(player);
+        playersById.set(id, player);
+        matchIndexByKey.set(key, player);
+      }
+    }
+
+    const existing = roster.find(r => r.id === player.id);
+    if (existing) {
+      if (existing.pricePaid !== finalPrice || !existing.synced) {
+        existing.pricePaid = finalPrice;
+        existing.synced = true;
+        return true;
+      }
+      return false;
+    }
+    roster.push({ id: player.id, pricePaid: finalPrice, synced: true });
+    return true;
+  }
+
+  function syncBaseUrl() {
+    return (sync.baseUrl || DEFAULT_SYNC.baseUrl).trim().replace(/\/+$/, '');
+  }
+
+  let syncTimer = null;
+  let syncTickInFlight = false;
+
+  function stopPolling() {
+    if (syncTimer) {
+      clearInterval(syncTimer);
+      syncTimer = null;
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    if (!sync.teamId) return;
+    syncTick();
+    syncTimer = setInterval(syncTick, SYNC_POLL_INTERVAL_MS);
+  }
+
+  async function syncTick() {
+    if (!sync.roomCode || !sync.teamId || syncTickInFlight) return;
+    syncTickInFlight = true;
+    try {
+      const url = `${syncBaseUrl()}/api/rooms/${encodeURIComponent(sync.roomCode)}/sync/roster?participantId=${encodeURIComponent(sync.teamId)}`;
+      const res = await fetch(url);
+      if (res.status === 403 || res.status === 404) {
+        stopPolling();
+        sync.lastError = res.status === 403
+          ? 'La sincronizzazione per questa squadra è stata disattivata dall’admin della stanza.'
+          : 'Stanza non trovata: controlla il codice o scollega e ricollega.';
+        saveState();
+        renderSyncPanel();
+        return;
+      }
+      if (!res.ok) throw new Error('Risposta non valida dal server.');
+      const data = await res.json();
+      sync.teamName = data.teamName || sync.teamName;
+      sync.lastError = null;
+      sync.lastSyncedAt = new Date().toISOString();
+
+      let added = 0;
+      (data.players || []).forEach(p => {
+        if (addSyncedPlayer(p.role, p.name, p.realTeam, p.finalPrice)) added++;
+      });
+
+      saveState();
+      if (added > 0) {
+        rebuildDerivedIndexes();
+        renderAll();
+        showToast(`${added} giocatore${added === 1 ? '' : 'i'} sincronizzat${added === 1 ? 'o' : 'i'} da Asta Live.`);
+      } else {
+        renderSyncPanel();
+      }
+    } catch (err) {
+      sync.lastError = 'Impossibile contattare Asta Live (verifica connessione o indirizzo).';
+      saveState();
+      renderSyncPanel();
+    } finally {
+      syncTickInFlight = false;
+    }
+  }
+
+  async function findSyncTeams() {
+    const baseUrl = document.getElementById('sync-base-url').value.trim().replace(/\/+$/, '') || DEFAULT_SYNC.baseUrl;
+    const roomCode = document.getElementById('sync-room-code').value.trim().toUpperCase();
+    const msgEl = document.getElementById('sync-setup-msg');
+    const picker = document.getElementById('sync-teams-picker');
+    const select = document.getElementById('sync-team-select');
+    msgEl.textContent = '';
+    picker.hidden = true;
+
+    if (!roomCode) {
+      msgEl.textContent = 'Inserisci il codice stanza di Asta Live.';
+      return;
+    }
+
+    try {
+      const res = await fetch(`${baseUrl}/api/rooms/${encodeURIComponent(roomCode)}/sync/teams`);
+      if (res.status === 404) {
+        msgEl.textContent = 'Codice stanza non trovato su Asta Live.';
+        return;
+      }
+      if (!res.ok) throw new Error('Risposta non valida.');
+      const data = await res.json();
+      const teams = data.teams || [];
+      if (teams.length === 0) {
+        msgEl.textContent = 'Nessuna squadra ha la sincronizzazione attiva in questa stanza: chiedi all’admin di attivarla per la tua squadra.';
+        return;
+      }
+      select.innerHTML = teams.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`).join('');
+      picker.hidden = false;
+      picker.dataset.baseUrl = baseUrl;
+      picker.dataset.roomCode = roomCode;
+    } catch (err) {
+      msgEl.textContent = 'Impossibile contattare Asta Live: verifica indirizzo e connessione.';
+    }
+  }
+
+  function linkSyncTeam() {
+    const picker = document.getElementById('sync-teams-picker');
+    const select = document.getElementById('sync-team-select');
+    const option = select.options[select.selectedIndex];
+    if (!option) return;
+
+    sync.baseUrl = picker.dataset.baseUrl;
+    sync.roomCode = picker.dataset.roomCode;
+    sync.teamId = option.value;
+    sync.teamName = option.textContent;
+    sync.lastError = null;
+    sync.lastSyncedAt = null;
+    saveState();
+    renderSyncPanel();
+    startPolling();
+    showToast(`Squadra "${option.textContent}" collegata. Sincronizzazione avviata.`);
+  }
+
+  async function unlinkSyncTeam() {
+    if (!(await showConfirm('Scollegare la sincronizzazione con Asta Live? I giocatori già sincronizzati restano nella tua rosa.'))) return;
+    stopPolling();
+    const baseUrl = sync.baseUrl;
+    sync = { ...DEFAULT_SYNC, baseUrl, ignoreKeys: sync.ignoreKeys };
+    saveState();
+    renderSyncPanel();
+  }
+
+  function renderSyncPanel() {
+    const linkedEl = document.getElementById('sync-linked');
+    const setupEl = document.getElementById('sync-setup');
+    const baseUrlInput = document.getElementById('sync-base-url');
+    const roomCodeInput = document.getElementById('sync-room-code');
+
+    if (document.activeElement !== baseUrlInput) baseUrlInput.value = sync.baseUrl || DEFAULT_SYNC.baseUrl;
+    if (document.activeElement !== roomCodeInput) roomCodeInput.value = sync.roomCode || '';
+
+    const linked = !!sync.teamId;
+    linkedEl.hidden = !linked;
+    setupEl.hidden = linked;
+    if (!linked) return;
+
+    document.getElementById('sync-team-label').textContent = `${sync.teamName || '—'} (stanza ${sync.roomCode})`;
+    document.getElementById('sync-last-update').textContent = sync.lastSyncedAt
+      ? new Date(sync.lastSyncedAt).toLocaleTimeString('it-IT')
+      : 'mai';
+
+    const errEl = document.getElementById('sync-error-msg');
+    if (sync.lastError) {
+      errEl.textContent = sync.lastError;
+      errEl.hidden = false;
+    } else {
+      errEl.hidden = true;
+    }
+  }
+
+  function wireSync() {
+    document.getElementById('btn-sync-find-teams').addEventListener('click', findSyncTeams);
+    document.getElementById('btn-sync-link').addEventListener('click', linkSyncTeam);
+    document.getElementById('btn-sync-now').addEventListener('click', () => syncTick());
+    document.getElementById('btn-sync-unlink').addEventListener('click', unlinkSyncTeam);
+
+    document.addEventListener('visibilitychange', () => {
+      if (!sync.teamId) return;
+      if (document.hidden) stopPolling();
+      else startPolling();
+    });
+  }
+
   // ---------- Sticky header offset (for anchor-scroll targets) ----------
   function updateHeaderOffset() {
     const header = document.getElementById('scoreboard');
@@ -840,9 +1094,11 @@
     rebuildDerivedIndexes();
     wireEvents();
     wireImport();
+    wireSync();
     renderAll();
     updateHeaderOffset();
     window.addEventListener('resize', updateHeaderOffset);
+    if (sync.teamId) startPolling();
   }
 
   document.addEventListener('DOMContentLoaded', init);

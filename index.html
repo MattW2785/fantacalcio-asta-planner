@@ -46,6 +46,7 @@
     <div class="formation-bars" id="formation-bars"></div>
 
     <nav class="quick-nav" aria-label="Navigazione rapida">
+      <a href="#sync-panel" class="quick-nav-link">Asta Live</a>
       <a href="#settings-panel" class="quick-nav-link">Impostazioni</a>
       <a href="#players-panel" class="quick-nav-link">Listone</a>
       <a href="#roster-panel" class="quick-nav-link quick-nav-highlight">La mia rosa</a>
@@ -54,6 +55,51 @@
 </header>
 
 <main>
+
+  <section class="panel sync-panel" id="sync-panel">
+    <h2 class="panel-title">Sincronizza con Asta Live</h2>
+    <p class="hint fm-explainer">Collega questa app alla stanza della tua asta su Asta Live Fantacalcio: ogni giocatore che acquisti per la squadra che scegli qui viene aggiunto automaticamente a "La mia rosa", prezzo incluso. Deve essere attivata dall'host/admin della stanza per la tua squadra specifica — se non vedi la tua squadra nell'elenco, chiedi a chi gestisce l'asta di attivarla.</p>
+
+    <div id="sync-linked" class="sync-status" hidden>
+      <div class="sync-status-row">
+        <span class="sync-status-label">Squadra collegata</span>
+        <span class="sync-status-value" id="sync-team-label">&mdash;</span>
+      </div>
+      <div class="sync-status-row">
+        <span class="sync-status-label">Ultimo aggiornamento</span>
+        <span class="sync-status-value" id="sync-last-update">mai</span>
+      </div>
+      <p class="hint sync-error" id="sync-error-msg" hidden></p>
+      <div class="sync-actions">
+        <button type="button" class="btn" id="btn-sync-now">Sincronizza ora</button>
+        <button type="button" class="btn btn-remove" id="btn-sync-unlink">Scollega</button>
+      </div>
+    </div>
+
+    <div id="sync-setup" class="sync-setup">
+      <div class="settings-grid">
+        <label class="field">
+          <span class="field-label">Indirizzo Asta Live</span>
+          <input type="text" id="sync-base-url" class="mono-input" placeholder="https://...">
+        </label>
+        <label class="field">
+          <span class="field-label">Codice stanza</span>
+          <input type="text" id="sync-room-code" class="mono-input" placeholder="Es. AB3D9" maxlength="12">
+        </label>
+      </div>
+      <div class="sync-actions">
+        <button type="button" class="btn" id="btn-sync-find-teams">Trova squadre</button>
+      </div>
+      <div id="sync-teams-picker" class="sync-teams-picker" hidden>
+        <label class="field">
+          <span class="field-label">Quale squadra gestisci</span>
+          <select id="sync-team-select" class="mono-input"></select>
+        </label>
+        <button type="button" class="btn btn-add" id="btn-sync-link">Collega questa squadra</button>
+      </div>
+      <p class="hint sync-error" id="sync-setup-msg"></p>
+    </div>
+  </section>
 
   <section class="panel settings-panel" id="settings-panel">
     <h2 class="panel-title">Impostazioni</h2>

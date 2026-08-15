@@ -291,6 +291,77 @@ main {
   max-width: 70ch;
 }
 
+/* ---------- Sync with Asta Live ---------- */
+.sync-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.sync-status-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.sync-status-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  min-width: 140px;
+}
+
+.sync-status-value {
+  font-family: var(--font-mono);
+  color: var(--good);
+  font-weight: 600;
+}
+
+.sync-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.4rem;
+}
+
+.sync-error {
+  color: var(--alert);
+}
+
+.sync-teams-picker {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.85rem;
+}
+
+.sync-teams-picker .field { flex: 1 1 220px; }
+
+#sync-setup-msg:empty { display: none; }
+
+.synced-badge {
+  display: inline-block;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(111, 191, 115, 0.15);
+  color: var(--good);
+  border: 1px solid rgba(111, 191, 115, 0.4);
+  vertical-align: middle;
+  margin-left: 0.4rem;
+  cursor: help;
+}
+
 /* ---------- Settings ---------- */
 .settings-grid {
   display: grid;
