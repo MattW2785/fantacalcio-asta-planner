@@ -8,7 +8,7 @@
   const SLOTS_PER_ROLE = { P: 3, D: 8, C: 8, A: 6 };
   const TOTAL_SLOTS = Object.values(SLOTS_PER_ROLE).reduce((a, b) => a + b, 0); // 25
   const STORAGE_KEY = 'fanta_asta_planner_v1';
-  const SYNC_POLL_INTERVAL_MS = 8000;
+  const SYNC_POLL_INTERVAL_MS = 3000;
 
   const DEFAULT_SETTINGS = {
     budgetTotale: 400,

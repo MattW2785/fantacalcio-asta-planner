@@ -19,8 +19,25 @@
 // e' cio' che fa uscire l'app aggiunta alla Home su iOS/iPadOS dalla cache "statica" del
 // WebView standalone, che altrimenti puo' restare bloccata sulla versione vista al primo
 // avvio e non ricontrollare mai il server per gli aggiornamenti.
+//
+// Un service worker gia' installato pero' non forza da solo il riavvio della pagina aperta:
+// quando ne subentra uno nuovo (self.skipWaiting + clients.claim in sw.js) ricarichiamo la
+// pagina una volta sola, cosi' l'utente vede subito la versione aggiornata invece di doverla
+// scoprire al lancio successivo. E ricontrolliamo attivamente ogni volta che l'app torna in
+// primo piano (riaperta da Home su iOS), perche' i browser non lo fanno abbastanza spesso da
+// soli per un'app standalone che resta "aperta" per ore durante un'asta.
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").catch(function () {});
+  navigator.serviceWorker.register("sw.js").then(function (reg) {
+    var reloading = false;
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") reg.update().catch(function () {});
+    });
+  }).catch(function () {});
 }
 </script>
 </head>
