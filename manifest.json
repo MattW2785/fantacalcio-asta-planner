@@ -1,0 +1,9 @@
+{
+  "name": "Fantacalcio Asta Planner",
+  "short_name": "FantaAsta",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0B2118",
+  "theme_color": "#0B2118",
+  "orientation": "portrait"
+}

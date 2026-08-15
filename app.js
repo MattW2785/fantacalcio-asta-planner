@@ -1,0 +1,849 @@
+(function () {
+  'use strict';
+
+  // ---------- Constants ----------
+  const ROLES = ['P', 'D', 'C', 'A'];
+  const ROLE_LABELS = { P: 'Portiere', D: 'Difensore', C: 'Centrocampista', A: 'Attaccante' };
+  const ROLE_LABELS_PLURAL = { P: 'Portieri', D: 'Difensori', C: 'Centrocampisti', A: 'Attaccanti' };
+  const SLOTS_PER_ROLE = { P: 3, D: 8, C: 8, A: 6 };
+  const TOTAL_SLOTS = Object.values(SLOTS_PER_ROLE).reduce((a, b) => a + b, 0); // 25
+  const STORAGE_KEY = 'fanta_asta_planner_v1';
+
+  const DEFAULT_SETTINGS = {
+    budgetTotale: 400,
+    numeroSquadre: 6,
+    correzionePct: 100,
+    pct: { P: 12, D: 25, C: 32, A: 31 }
+  };
+
+  // Strategie di allocazione budget consigliate, selezionabili nel pannello impostazioni.
+  const PCT_PRESETS = [
+    { key: 'equilibrato', pct: { P: 12, D: 25, C: 32, A: 31 } },
+    { key: 'attacco', pct: { P: 8, D: 20, C: 28, A: 44 } },
+    { key: 'centrocampo', pct: { P: 8, D: 20, C: 40, A: 32 } },
+    { key: 'difesa', pct: { P: 16, D: 32, C: 28, A: 24 } }
+  ];
+
+  // ---------- State ----------
+  const initial = loadState();
+  let settings = initial.settings;
+  let roster = initial.roster; // [{id, pricePaid}]
+  let PLAYERS_DATA = initial.players; // caricato da file Excel/CSV, nessun listone incorporato
+  let playersMeta = initial.playersMeta; // { fileName, importedAt } | null
+  let activeRole = 'P';
+  let searchTerm = '';
+  let sortKey = 'qa';
+  let sortDir = 'desc';
+
+  let playersById = new Map();
+  // Giocatori realmente acquistabili (non off-limits) per ruolo, ordinati per quotazione decrescente:
+  // servono per stimare quanti crediti "assorbirà" davvero ciascun reparto.
+  let NON_EXCL_SORTED_BY_ROLE = { P: [], D: [], C: [], A: [] };
+
+  function rebuildDerivedIndexes() {
+    playersById = new Map(PLAYERS_DATA.map(p => [p.id, p]));
+    NON_EXCL_SORTED_BY_ROLE = { P: [], D: [], C: [], A: [] };
+    ROLES.forEach(role => {
+      NON_EXCL_SORTED_BY_ROLE[role] = PLAYERS_DATA.filter(p => p.r === role && !p.excl).sort((a, b) => b.qa - a.qa);
+    });
+    computeConvenienzaTiers();
+  }
+
+  // ---------- Persistence ----------
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null };
+      const parsed = JSON.parse(raw);
+      return {
+        settings: { ...DEFAULT_SETTINGS, ...parsed.settings, pct: { ...DEFAULT_SETTINGS.pct, ...(parsed.settings && parsed.settings.pct) } },
+        roster: Array.isArray(parsed.roster) ? parsed.roster : [],
+        players: Array.isArray(parsed.players) ? parsed.players : [],
+        playersMeta: parsed.playersMeta || null
+      };
+    } catch (e) {
+      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null };
+    }
+  }
+
+  function saveState() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta }));
+  }
+
+  // ---------- Derived calculations ----------
+  // Fattore di mercato PER RUOLO: quanti crediti la lega assegna in media a un punto di
+  // quotazione in quel reparto. Si ottiene confrontando il budget complessivo destinato al
+  // ruolo (percentuale x budget x squadre) con la somma delle quotazioni dei giocatori che,
+  // dato il numero di squadre, andranno realmente riempiti in quel reparto (i migliori N
+  // acquistabili, N = slot ruolo x squadre). In un'asta a rialzo un fattore > 1 significa che
+  // il reparto viene mediamente pagato SOPRA quotazione (tipico di centrocampisti/attaccanti,
+  // dove la domanda supera l'offerta "di qualità"); < 1 significa che resta sotto quotazione.
+  function fattoreMercatoRuolo(role) {
+    const slotsTotali = SLOTS_PER_ROLE[role] * settings.numeroSquadre;
+    const pool = NON_EXCL_SORTED_BY_ROLE[role].slice(0, slotsTotali);
+    const qaSum = pool.reduce((s, p) => s + p.qa, 0) || 1;
+    const budgetRuolo = (settings.pct[role] / 100) * settings.budgetTotale * settings.numeroSquadre;
+    const base = budgetRuolo / qaSum;
+    return base * (settings.correzionePct / 100);
+  }
+
+  function computeRoleFactors() {
+    const factors = {};
+    ROLES.forEach(role => { factors[role] = fattoreMercatoRuolo(role); });
+    return factors;
+  }
+
+  function priceRange(qa, factor) {
+    const min = Math.max(1, Math.round(qa * factor * 0.75));
+    const max = Math.max(min + 1, Math.round(qa * factor * 1.6));
+    return { min, max };
+  }
+
+  function convenienza(p) {
+    return p.fvm / Math.max(p.qa, 1);
+  }
+
+  // percentile tiers per role, computed once per render pass (data is static)
+  let convenienzaTiers = null; // Map<id, 'ottimo'|'buono'|'basso'>
+  function computeConvenienzaTiers() {
+    const map = new Map();
+    ROLES.forEach(role => {
+      const list = PLAYERS_DATA.filter(p => p.r === role)
+        .map(p => ({ id: p.id, conv: convenienza(p) }))
+        .sort((a, b) => b.conv - a.conv);
+      const n = list.length;
+      list.forEach((entry, idx) => {
+        const fraction = (idx + 1) / n;
+        let tier;
+        if (fraction <= 0.2) tier = 'ottimo';
+        else if (fraction <= 0.5) tier = 'buono';
+        else tier = 'basso';
+        map.set(entry.id, tier);
+      });
+    });
+    convenienzaTiers = map;
+  }
+
+  function filledCounts() {
+    const counts = { P: 0, D: 0, C: 0, A: 0 };
+    roster.forEach(r => {
+      const p = playersById.get(r.id);
+      if (p) counts[p.r]++;
+    });
+    return counts;
+  }
+
+  function totalSpeso() {
+    return roster.reduce((sum, r) => sum + (Number(r.pricePaid) || 0), 0);
+  }
+
+  function roleSpeso(role) {
+    return roster.reduce((sum, r) => {
+      const p = playersById.get(r.id);
+      return p && p.r === role ? sum + (Number(r.pricePaid) || 0) : sum;
+    }, 0);
+  }
+
+  function roleBudgetConsigliato(role) {
+    return (settings.pct[role] / 100) * settings.budgetTotale;
+  }
+
+  // Ribilancia il budget rimanente tra i ruoli non ancora completi, in proporzione alle
+  // percentuali impostate. Un ruolo già pieno esce dal calcolo e il suo "peso" si redistribuisce
+  // sugli altri; se si sfora in un ruolo, il budget disponibile per tutti gli altri si restringe
+  // di conseguenza — è la vera disponibilità residua, non solo (piano - speso) di quel ruolo.
+  function computeRebalancedRoleTargets() {
+    const counts = filledCounts();
+    const totalRemaining = settings.budgetTotale - totalSpeso();
+    const activeRoles = ROLES.filter(role => counts[role] < SLOTS_PER_ROLE[role]);
+    const weightSum = activeRoles.reduce((sum, role) => sum + Number(settings.pct[role] || 0), 0) || 1;
+    const targets = {};
+    ROLES.forEach(role => {
+      if (counts[role] >= SLOTS_PER_ROLE[role]) {
+        targets[role] = 0;
+        return;
+      }
+      targets[role] = totalRemaining * (Number(settings.pct[role] || 0) / weightSum);
+    });
+    return targets;
+  }
+
+  function emptySlotsTotal(counts) {
+    return ROLES.reduce((sum, role) => sum + Math.max(0, SLOTS_PER_ROLE[role] - counts[role]), 0);
+  }
+
+  // ---------- Add / remove / edit roster ----------
+  function canAddPlayer(player, price) {
+    if (player.excl) return { ok: false, reason: 'Giocatore non acquistabile (regola off-limits).' };
+    const counts = filledCounts();
+    if (counts[player.r] >= SLOTS_PER_ROLE[player.r]) {
+      return { ok: false, reason: `Slot ${ROLE_LABELS[player.r]} già al completo (${SLOTS_PER_ROLE[player.r]}/${SLOTS_PER_ROLE[player.r]}).` };
+    }
+    const newCounts = { ...counts, [player.r]: counts[player.r] + 1 };
+    const emptyAfter = emptySlotsTotal(newCounts);
+    const remainingAfter = settings.budgetTotale - (totalSpeso() + price);
+    if (remainingAfter < emptyAfter) {
+      return { ok: false, reason: 'Budget insufficiente: deve restare almeno 1 credito per ogni slot ancora vuoto.' };
+    }
+    return { ok: true };
+  }
+
+  function canSetPrice(playerId, newPrice) {
+    const counts = filledCounts();
+    const emptyAfter = emptySlotsTotal(counts);
+    const currentSpesoOthers = roster.reduce((sum, r) => sum + (r.id === playerId ? 0 : (Number(r.pricePaid) || 0)), 0);
+    const remainingAfter = settings.budgetTotale - (currentSpesoOthers + newPrice);
+    if (remainingAfter < emptyAfter) {
+      return { ok: false, reason: 'Budget insufficiente: deve restare almeno 1 credito per ogni slot ancora vuoto.' };
+    }
+    return { ok: true };
+  }
+
+  function addPlayer(id) {
+    const player = playersById.get(id);
+    if (!player) return;
+    const defaultPrice = 1;
+    const check = canAddPlayer(player, defaultPrice);
+    if (!check.ok) {
+      showToast(check.reason, 'error');
+      return;
+    }
+    roster.push({ id, pricePaid: defaultPrice });
+    saveState();
+    renderAll();
+    const rimanenteRuolo = computeRebalancedRoleTargets()[player.r];
+    showToast(`${player.n} aggiunto (${ROLE_LABELS[player.r]}). Rimanente ribilanciato per il ruolo: ${rimanenteRuolo.toFixed(0)} FM.`);
+  }
+
+  function removePlayer(id) {
+    roster = roster.filter(r => r.id !== id);
+    saveState();
+    renderAll();
+  }
+
+  function setPrice(id, price) {
+    price = Math.max(0, Math.round(Number(price) || 0));
+    const entry = roster.find(r => r.id === id);
+    if (!entry) return;
+    entry.pricePaid = price;
+    saveState();
+    renderAll();
+  }
+
+  // ---------- Toast ----------
+  let toastTimer = null;
+  function showToast(msg, type) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.remove('toast-error', 'toast-ok');
+    el.classList.add('show', type === 'error' ? 'toast-error' : 'toast-ok');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+  }
+
+  // ---------- Confirm modal ----------
+  // Sostituisce window.confirm(): nelle web-app aggiunte alla schermata Home su iOS
+  // (display standalone) i dialog nativi confirm/alert/prompt possono non comparire affatto,
+  // bloccando silenziosamente l'azione. Questo modal disegnato in pagina funziona ovunque.
+  function showConfirm(message) {
+    return new Promise(resolve => {
+      const overlay = document.getElementById('confirm-modal');
+      document.getElementById('confirm-modal-message').textContent = message;
+      overlay.hidden = false;
+
+      const cleanup = (result) => {
+        overlay.hidden = true;
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        overlay.removeEventListener('click', onOverlayClick);
+        resolve(result);
+      };
+      const okBtn = document.getElementById('confirm-modal-ok');
+      const cancelBtn = document.getElementById('confirm-modal-cancel');
+      const onOk = () => cleanup(true);
+      const onCancel = () => cleanup(false);
+      const onOverlayClick = (e) => { if (e.target === overlay) cleanup(false); };
+
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('click', onOverlayClick);
+    });
+  }
+
+  // ---------- Rendering: Dashboard ----------
+  function renderDashboard() {
+    const speso = totalSpeso();
+    const remaining = settings.budgetTotale - speso;
+    const counts = filledCounts();
+    const filledTotal = ROLES.reduce((s, r) => s + counts[r], 0);
+
+    document.getElementById('fig-budget').textContent = settings.budgetTotale;
+    document.getElementById('fig-spent').textContent = speso;
+    const remainingEl = document.getElementById('fig-remaining');
+    remainingEl.textContent = remaining;
+    remainingEl.classList.toggle('over', remaining < 0);
+    document.getElementById('fig-slots').textContent = `${filledTotal}/${TOTAL_SLOTS}`;
+
+    const barsContainer = document.getElementById('formation-bars');
+    barsContainer.innerHTML = '';
+    ROLES.forEach(role => {
+      const row = document.createElement('div');
+      row.className = 'formation-row';
+      const segWrap = document.createElement('div');
+      segWrap.className = 'formation-segments';
+      for (let i = 0; i < SLOTS_PER_ROLE[role]; i++) {
+        const seg = document.createElement('span');
+        seg.className = 'segment' + (i < counts[role] ? ` filled role-${role}` : '');
+        segWrap.appendChild(seg);
+      }
+      const label = document.createElement('span');
+      label.textContent = `${role} ${counts[role]}/${SLOTS_PER_ROLE[role]}`;
+      row.appendChild(segWrap);
+      row.appendChild(label);
+      barsContainer.appendChild(row);
+    });
+  }
+
+  // ---------- Rendering: Settings ----------
+  function renderSettings() {
+    document.getElementById('input-budget').value = settings.budgetTotale;
+    document.getElementById('input-teams').value = settings.numeroSquadre;
+    document.getElementById('input-correzione').value = settings.correzionePct;
+
+    ROLES.forEach(role => {
+      document.getElementById(`pct-${role}`).value = settings.pct[role];
+    });
+
+    updatePctStatus();
+    renderRoleBudgetSummary();
+    highlightActivePreset();
+  }
+
+  function highlightActivePreset() {
+    const activeKey = (PCT_PRESETS.find(p => ROLES.every(role => p.pct[role] === Number(settings.pct[role]))) || {}).key;
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.preset === activeKey);
+    });
+  }
+
+  function updatePctStatus() {
+    const sum = ROLES.reduce((s, r) => s + Number(settings.pct[r] || 0), 0);
+    const statusEl = document.getElementById('pct-status');
+    if (sum === 100) {
+      statusEl.textContent = `Somma percentuali: ${sum}% ✓`;
+      statusEl.className = 'pct-status ok';
+    } else {
+      statusEl.textContent = `Somma percentuali: ${sum}% — deve essere 100%`;
+      statusEl.className = 'pct-status error';
+    }
+    return sum === 100;
+  }
+
+  function renderRoleBudgetSummary() {
+    const container = document.getElementById('role-budget-summary');
+    container.innerHTML = '';
+    const factors = computeRoleFactors();
+    const counts = filledCounts();
+    const rebalanced = computeRebalancedRoleTargets();
+    ROLES.forEach(role => {
+      const pianoIniziale = roleBudgetConsigliato(role);
+      const avg = pianoIniziale / SLOTS_PER_ROLE[role];
+      const hasPlayers = NON_EXCL_SORTED_BY_ROLE[role].length > 0;
+      const factor = factors[role];
+      const speso = roleSpeso(role);
+      const emptySlots = SLOTS_PER_ROLE[role] - counts[role];
+      const rimanente = rebalanced[role];
+      const mediaSlot = emptySlots > 0 ? rimanente / emptySlots : 0;
+      const card = document.createElement('div');
+      card.className = 'role-budget-card';
+      card.innerHTML = `
+        <span class="role-tag role-${role}">${role}</span>
+        <span class="rb-figures">
+          <div>piano ${pianoIniziale.toFixed(0)} FM &middot; ~${avg.toFixed(1)}/slot</div>
+          <div class="rb-avg">fattore reparto: ${hasPlayers ? factor.toFixed(2) + 'x quot.' : '— (carica il listone)'}</div>
+          <div class="rb-avg">speso ${speso.toFixed(0)} &middot; ribilanciato <span class="${rimanente < 0 ? 'rb-over' : ''}">${rimanente.toFixed(0)}</span> FM${emptySlots > 0 ? ` (~${mediaSlot.toFixed(1)}/slot)` : ' (completo)'}</div>
+        </span>
+      `;
+      container.appendChild(card);
+    });
+  }
+
+  // ---------- Rendering: per-role spend strip (sopra la tabella, segue il tab attivo) ----------
+  function renderRoleSpendStrip() {
+    const strip = document.getElementById('role-spend-strip');
+    const speso = roleSpeso(activeRole);
+    const rebalanced = computeRebalancedRoleTargets();
+    const rimanente = rebalanced[activeRole];
+    const counts = filledCounts();
+    const emptySlots = SLOTS_PER_ROLE[activeRole] - counts[activeRole];
+    const poolRuolo = speso + rimanente; // quota totale (già spesa + ancora disponibile) ricalcolata sul budget rimanente
+    const pctUsed = poolRuolo > 0 ? Math.min(100, Math.max(0, (speso / poolRuolo) * 100)) : 0;
+    const over = rimanente < 0;
+    const mediaSlot = emptySlots > 0 ? rimanente / emptySlots : 0;
+
+    strip.innerHTML = `
+      <span class="role-tag role-${activeRole}">${activeRole}</span>
+      <span class="rss-figure"><span class="rss-label">Speso</span><span class="rss-value">${speso.toFixed(0)} FM</span></span>
+      <div class="rss-bar-wrap"><div class="rss-bar-fill${over ? ' over' : ''}" style="width:${pctUsed}%"></div></div>
+      <span class="rss-figure"><span class="rss-label">Rimanente (ribilanciato)</span><span class="rss-value rss-remaining${over ? ' over' : ''}">${rimanente.toFixed(0)} FM</span></span>
+      ${emptySlots > 0 ? `<span class="rss-figure"><span class="rss-label">Media/slot libero</span><span class="rss-value">${mediaSlot.toFixed(1)} FM</span></span>` : '<span class="rss-figure"><span class="rss-label">Ruolo</span><span class="rss-value">completo</span></span>'}
+    `;
+  }
+
+  // ---------- Rendering: Players table ----------
+  function renderTable() {
+    renderRoleSpendStrip();
+
+    const tbody = document.getElementById('players-tbody');
+    tbody.innerHTML = '';
+
+    let list = PLAYERS_DATA.filter(p => p.r === activeRole);
+
+    if (searchTerm.trim()) {
+      const q = searchTerm.trim().toLowerCase();
+      list = list.filter(p => p.n.toLowerCase().includes(q) || p.s.toLowerCase().includes(q));
+    }
+
+    list = list.slice().sort((a, b) => {
+      let va, vb;
+      if (sortKey === 'qa') { va = a.qa; vb = b.qa; }
+      else if (sortKey === 'fvm') { va = a.fvm; vb = b.fvm; }
+      else { va = convenienza(a); vb = convenienza(b); }
+      return sortDir === 'asc' ? va - vb : vb - va;
+    });
+
+    document.querySelectorAll('#players-table th.sortable').forEach(th => {
+      th.classList.toggle('sort-active', th.dataset.sort === sortKey);
+      th.textContent = th.textContent.replace(/ [▲▼]$/, '');
+      if (th.dataset.sort === sortKey) {
+        th.textContent += sortDir === 'asc' ? ' ▲' : ' ▼';
+      }
+    });
+
+    const rosterIds = new Set(roster.map(r => r.id));
+    const counts = filledCounts();
+    const roleFactor = fattoreMercatoRuolo(activeRole);
+
+    if (list.length === 0) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="7" class="no-results">Nessun giocatore trovato.</td>`;
+      tbody.appendChild(tr);
+      return;
+    }
+
+    list.forEach(p => {
+      const tr = document.createElement('tr');
+      const inRoster = rosterIds.has(p.id);
+      const tier = convenienzaTiers.get(p.id);
+      const tierLabel = { ottimo: 'Ottimo affare', buono: 'Buon rapporto', basso: 'Nella media' }[tier];
+      const range = priceRange(p.qa, roleFactor);
+      const conv = convenienza(p);
+
+      if (p.excl) tr.classList.add('excluded');
+
+      const slotFull = counts[p.r] >= SLOTS_PER_ROLE[p.r];
+      const disableAdd = p.excl || inRoster || slotFull;
+      let addLabel = 'Aggiungi';
+      if (inRoster) addLabel = 'In rosa';
+      else if (p.excl) addLabel = 'Non acq.';
+      else if (slotFull) addLabel = 'Slot pieno';
+
+      const starterKey = (p.n.trim() + '|' + p.s.trim()).toLowerCase();
+      const isStarter = typeof LIKELY_STARTERS !== 'undefined' && LIKELY_STARTERS[starterKey];
+      const starterMark = isStarter
+        ? '<span class="starter-dot" title="Probabile titolare secondo le probabili formazioni Serie A 2026/27 (fonte: Goal.com, agg. 9 ago 2026)">●</span> '
+        : '';
+
+      tr.innerHTML = `
+        <td class="player-name">${starterMark}${escapeHtml(p.n)}${p.excl ? ' <span class="excl-badge" title="Tra i 5 giocatori più quotati del ruolo: non acquistabile per regola di lega (off-limits)">off-limits</span>' : ''}</td>
+        <td>${escapeHtml(p.s)}</td>
+        <td class="mono-cell">${p.qa}</td>
+        <td class="mono-cell">${p.fvm}</td>
+        <td><span class="conv-badge conv-${tier}"><span class="conv-dot"></span>${conv.toFixed(1)} · ${tierLabel}</span></td>
+        <td class="price-range">${range.min}&ndash;${range.max} FM</td>
+        <td><button class="btn btn-add" data-add="${p.id}" ${disableAdd ? 'disabled' : ''}>${addLabel}</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll('[data-add]').forEach(btn => {
+      btn.addEventListener('click', () => addPlayer(Number(btn.dataset.add)));
+    });
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // ---------- Rendering: Roster ----------
+  function renderRoster() {
+    const container = document.getElementById('roster-groups');
+    container.innerHTML = '';
+    const counts = filledCounts();
+
+    ROLES.forEach(role => {
+      const group = document.createElement('div');
+      group.className = 'roster-group';
+
+      const header = document.createElement('div');
+      header.className = 'roster-group-header';
+      header.innerHTML = `
+        <span class="role-tag role-${role}">${role}</span>
+        <span class="roster-group-title">${ROLE_LABELS_PLURAL[role]}</span>
+        <span class="roster-group-count">${counts[role]}/${SLOTS_PER_ROLE[role]}</span>
+      `;
+      group.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'roster-list';
+
+      const entries = roster
+        .map(r => ({ ...r, player: playersById.get(r.id) }))
+        .filter(r => r.player && r.player.r === role)
+        .sort((a, b) => (b.pricePaid || 0) - (a.pricePaid || 0));
+
+      entries.forEach(entry => {
+        const card = document.createElement('div');
+        card.className = 'roster-card';
+        card.innerHTML = `
+          <div class="roster-card-info">
+            <div class="roster-card-name">${escapeHtml(entry.player.n)}</div>
+            <div class="roster-card-team">${escapeHtml(entry.player.s)}</div>
+          </div>
+          <div class="roster-card-actions">
+            <input type="number" class="price-input" min="0" step="1" value="${entry.pricePaid}" data-price-id="${entry.id}">
+            <button class="btn btn-remove" data-remove="${entry.id}" title="Rimuovi dalla rosa">✕</button>
+          </div>
+        `;
+        list.appendChild(card);
+      });
+
+      const emptyCount = SLOTS_PER_ROLE[role] - entries.length;
+      for (let i = 0; i < emptyCount; i++) {
+        const empty = document.createElement('div');
+        empty.className = 'roster-empty-slot';
+        empty.textContent = 'Slot libero';
+        list.appendChild(empty);
+      }
+
+      group.appendChild(list);
+      container.appendChild(group);
+    });
+
+    container.querySelectorAll('[data-remove]').forEach(btn => {
+      btn.addEventListener('click', () => removePlayer(Number(btn.dataset.remove)));
+    });
+
+    container.querySelectorAll('[data-price-id]').forEach(input => {
+      input.addEventListener('change', () => {
+        const id = Number(input.dataset.priceId);
+        const newPrice = Math.max(0, Math.round(Number(input.value) || 0));
+        const check = canSetPrice(id, newPrice);
+        if (!check.ok) {
+          showToast(check.reason, 'error');
+          input.classList.add('over-budget');
+        } else {
+          input.classList.remove('over-budget');
+        }
+        setPrice(id, newPrice);
+      });
+    });
+  }
+
+  // ---------- Full render ----------
+  function renderAll() {
+    document.body.classList.toggle('no-players', PLAYERS_DATA.length === 0);
+    renderImportStatus();
+    renderDashboard();
+    renderSettings();
+    renderTable();
+    renderRoster();
+  }
+
+  function renderImportStatus() {
+    const el = document.getElementById('import-status');
+    const clearBtn = document.getElementById('btn-clear-players');
+    if (PLAYERS_DATA.length === 0) {
+      el.textContent = 'Nessun listone caricato.';
+      el.classList.remove('loaded');
+      clearBtn.disabled = true;
+      return;
+    }
+    const counts = { P: 0, D: 0, C: 0, A: 0 };
+    PLAYERS_DATA.forEach(p => { if (counts[p.r] !== undefined) counts[p.r]++; });
+    const when = playersMeta && playersMeta.importedAt ? new Date(playersMeta.importedAt).toLocaleString('it-IT') : '';
+    const name = playersMeta && playersMeta.fileName ? playersMeta.fileName : 'listone';
+    el.textContent = `${name}: ${PLAYERS_DATA.length} giocatori (${counts.P}P/${counts.D}D/${counts.C}C/${counts.A}A)${when ? ' · caricato ' + when : ''}`;
+    el.classList.add('loaded');
+    clearBtn.disabled = false;
+  }
+
+  // ---------- Import listone da Excel/CSV ----------
+  // Alias delle intestazioni riconosciute (normalizzate: minuscolo, senza spazi/punteggiatura).
+  // "Qt.A"->"qta" e "FVM"->"fvm" sono distinti da "Qt.A M"/"FVM M" (varianti Mantra, ignorate).
+  const HEADER_ALIASES = {
+    id: ['id'],
+    r: ['r', 'ruolo', 'ruoloclassic'],
+    n: ['nome', 'giocatore', 'calciatore'],
+    s: ['squadra', 'team'],
+    qa: ['qta', 'quotazione', 'quotazioneattuale', 'prezzo'],
+    fvm: ['fvm', 'fantavalore', 'fantavaloredimercato']
+  };
+
+  function normalizeHeader(cell) {
+    return String(cell == null ? '' : cell).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function findHeaderRow(aoa) {
+    const limit = Math.min(aoa.length, 15);
+    for (let i = 0; i < limit; i++) {
+      const normCells = (aoa[i] || []).map(normalizeHeader);
+      const hasNome = normCells.some(c => HEADER_ALIASES.n.includes(c));
+      const hasSquadra = normCells.some(c => HEADER_ALIASES.s.includes(c));
+      const hasRuolo = normCells.some(c => HEADER_ALIASES.r.includes(c));
+      if (hasNome && hasSquadra && hasRuolo) return i;
+    }
+    return -1;
+  }
+
+  function buildColumnMap(headerRow) {
+    const normCells = headerRow.map(normalizeHeader);
+    const map = {};
+    Object.keys(HEADER_ALIASES).forEach(field => {
+      const idx = normCells.findIndex(c => HEADER_ALIASES[field].includes(c));
+      if (idx !== -1) map[field] = idx;
+    });
+    return map;
+  }
+
+  // Regola off-limits (SPEC.md): i 5 giocatori per quotazione più alta in ciascun reparto di
+  // movimento (D, C, A — non i portieri) non sono acquistabili. Va sempre ricalcolata sul
+  // listone effettivamente caricato, non presa per buona da una colonna esterna.
+  function recomputeExclFlags(players) {
+    ['D', 'C', 'A'].forEach(role => {
+      const top5Qa = players
+        .filter(p => p.r === role)
+        .map(p => p.qa)
+        .sort((a, b) => b - a)
+        .slice(0, 5);
+      const threshold = top5Qa.length ? Math.min(...top5Qa) : Infinity;
+      players.forEach(p => {
+        if (p.r === role && p.qa >= threshold && top5Qa.length) p.excl = true;
+      });
+    });
+    return players;
+  }
+
+  function pickSheet(workbook) {
+    const wantedName = workbook.SheetNames.find(n => normalizeHeader(n) === 'tutti');
+    return workbook.Sheets[wantedName || workbook.SheetNames[0]];
+  }
+
+  function parsePlayersFromAOA(aoa) {
+    const headerIdx = findHeaderRow(aoa);
+    if (headerIdx === -1) {
+      throw new Error('Non trovo le colonne attese (Nome, Squadra, Ruolo) nelle prime righe del file. Controlla il formato.');
+    }
+    const colMap = buildColumnMap(aoa[headerIdx]);
+    if (colMap.n === undefined || colMap.s === undefined || colMap.r === undefined) {
+      throw new Error('Colonne obbligatorie mancanti (Nome, Squadra, Ruolo).');
+    }
+
+    const players = [];
+    const usedIds = new Set();
+    let syntheticId = 1;
+    let skipped = 0;
+
+    for (let i = headerIdx + 1; i < aoa.length; i++) {
+      const row = aoa[i];
+      if (!row || row.length === 0) continue;
+      const nome = row[colMap.n] != null ? String(row[colMap.n]).trim() : '';
+      const squadra = row[colMap.s] != null ? String(row[colMap.s]).trim() : '';
+      const ruolo = row[colMap.r] != null ? String(row[colMap.r]).trim().toUpperCase() : '';
+      if (!nome || !squadra || !ROLES.includes(ruolo)) { if (nome || squadra) skipped++; continue; }
+
+      const qa = colMap.qa !== undefined ? Number(row[colMap.qa]) || 0 : 0;
+      const fvm = colMap.fvm !== undefined ? Number(row[colMap.fvm]) || 0 : 0;
+      let id = colMap.id !== undefined ? parseInt(row[colMap.id], 10) : NaN;
+      if (!Number.isFinite(id) || usedIds.has(id)) {
+        while (usedIds.has(syntheticId)) syntheticId++;
+        id = syntheticId;
+      }
+      usedIds.add(id);
+
+      players.push({ id, r: ruolo, n: nome, s: squadra, qa, fvm, excl: false });
+    }
+
+    if (players.length === 0) {
+      throw new Error('Nessuna riga valida trovata nel file.');
+    }
+
+    recomputeExclFlags(players);
+    return { players, skipped };
+  }
+
+  function readFileAsArrayBuffer(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('Impossibile leggere il file.'));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  async function handleFileImport(file) {
+    let players, skipped;
+    try {
+      const buffer = await readFileAsArrayBuffer(file);
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet = pickSheet(workbook);
+      const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+      ({ players, skipped } = parsePlayersFromAOA(aoa));
+    } catch (err) {
+      showToast(`Import fallito: ${err.message || err}`, 'error');
+      return;
+    }
+
+    const hasExisting = PLAYERS_DATA.length > 0;
+    const hasRoster = roster.length > 0;
+    if (hasExisting || hasRoster) {
+      const msg = hasRoster
+        ? `Caricare questo file sostituirà il listone attuale e azzererà la rosa (${roster.length} giocatori già inseriti). Continuare?`
+        : 'Caricare questo file sostituirà il listone attualmente caricato. Continuare?';
+      if (!(await showConfirm(msg))) return;
+    }
+
+    PLAYERS_DATA = players;
+    roster = [];
+    playersMeta = { fileName: file.name, importedAt: new Date().toISOString() };
+    rebuildDerivedIndexes();
+    activeRole = 'P';
+    document.querySelectorAll('.role-tab').forEach(t => t.classList.toggle('active', t.dataset.role === 'P'));
+    searchTerm = '';
+    document.getElementById('search-input').value = '';
+    saveState();
+    renderAll();
+
+    const counts = { P: 0, D: 0, C: 0, A: 0 };
+    players.forEach(p => counts[p.r]++);
+    const skippedMsg = skipped > 0 ? ` (${skipped} righe ignorate)` : '';
+    showToast(`Listone caricato: ${players.length} giocatori — ${counts.P}P/${counts.D}D/${counts.C}C/${counts.A}A${skippedMsg}.`);
+  }
+
+  async function clearPlayers() {
+    if (PLAYERS_DATA.length === 0) return;
+    const msg = roster.length > 0
+      ? `Svuotare il listone caricato azzererà anche la rosa (${roster.length} giocatori già inseriti). Continuare?`
+      : 'Svuotare il listone caricato?';
+    if (!(await showConfirm(msg))) return;
+    PLAYERS_DATA = [];
+    roster = [];
+    playersMeta = null;
+    rebuildDerivedIndexes();
+    saveState();
+    renderAll();
+    showToast('Listone svuotato.');
+  }
+
+  function wireImport() {
+    document.getElementById('players-file-input').addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = ''; // permette di ricaricare lo stesso file una seconda volta
+      if (file) handleFileImport(file);
+    });
+    document.getElementById('btn-clear-players').addEventListener('click', clearPlayers);
+  }
+
+  // ---------- Event wiring ----------
+  function wireEvents() {
+    document.getElementById('input-budget').addEventListener('change', e => {
+      const v = Math.max(1, Math.round(Number(e.target.value) || DEFAULT_SETTINGS.budgetTotale));
+      settings.budgetTotale = v;
+      saveState();
+      renderAll();
+    });
+
+    document.getElementById('input-teams').addEventListener('change', e => {
+      const v = Math.max(2, Math.round(Number(e.target.value) || DEFAULT_SETTINGS.numeroSquadre));
+      settings.numeroSquadre = v;
+      saveState();
+      renderAll();
+    });
+
+    document.getElementById('input-correzione').addEventListener('change', e => {
+      const v = Math.max(1, Number(e.target.value) || DEFAULT_SETTINGS.correzionePct);
+      settings.correzionePct = v;
+      saveState();
+      renderAll();
+    });
+
+    ROLES.forEach(role => {
+      document.getElementById(`pct-${role}`).addEventListener('change', e => {
+        const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0)));
+        const trial = { ...settings.pct, [role]: v };
+        settings.pct = trial;
+        saveState();
+        renderSettings();
+        renderTable();
+      });
+    });
+
+    document.getElementById('preset-row').addEventListener('click', e => {
+      const btn = e.target.closest('.preset-btn');
+      if (!btn) return;
+      const preset = PCT_PRESETS.find(p => p.key === btn.dataset.preset);
+      if (!preset) return;
+      settings.pct = { ...preset.pct };
+      saveState();
+      renderSettings();
+      renderTable();
+      showToast(`Percentuali applicate: P ${preset.pct.P}% · D ${preset.pct.D}% · C ${preset.pct.C}% · A ${preset.pct.A}%`);
+    });
+
+    document.getElementById('role-tabs').addEventListener('click', e => {
+      const btn = e.target.closest('.role-tab');
+      if (!btn) return;
+      activeRole = btn.dataset.role;
+      document.querySelectorAll('.role-tab').forEach(t => t.classList.toggle('active', t === btn));
+      renderTable();
+    });
+
+    document.getElementById('search-input').addEventListener('input', e => {
+      searchTerm = e.target.value;
+      renderTable();
+    });
+
+    document.querySelectorAll('#players-table th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (sortKey === key) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortKey = key;
+          sortDir = 'desc';
+        }
+        renderTable();
+      });
+    });
+  }
+
+  // ---------- Sticky header offset (for anchor-scroll targets) ----------
+  function updateHeaderOffset() {
+    const header = document.getElementById('scoreboard');
+    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+  }
+
+  // ---------- Init ----------
+  function init() {
+    rebuildDerivedIndexes();
+    wireEvents();
+    wireImport();
+    renderAll();
+    updateHeaderOffset();
+    window.addEventListener('resize', updateHeaderOffset);
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
