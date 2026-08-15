@@ -361,6 +361,50 @@ main {
 
 #sync-setup-msg:empty { display: none; }
 
+.sync-ignored {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.sync-ignored-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.sync-ignored-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+}
+
+.sync-ignored-team {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.sync-ignored-undo {
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--good);
+  background: transparent;
+  border: 1px solid var(--good);
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.sync-ignored-undo:hover { background: rgba(111, 191, 115, 0.15); }
+
 .synced-badge {
   display: inline-block;
   font-size: 0.62rem;

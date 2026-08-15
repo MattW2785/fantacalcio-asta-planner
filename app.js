@@ -8,7 +8,7 @@
   const SLOTS_PER_ROLE = { P: 3, D: 8, C: 8, A: 6 };
   const TOTAL_SLOTS = Object.values(SLOTS_PER_ROLE).reduce((a, b) => a + b, 0); // 25
   const STORAGE_KEY = 'fanta_asta_planner_v1';
-  const SYNC_POLL_INTERVAL_MS = 3000;
+  const SYNC_POLL_INTERVAL_MS = 2000;
 
   const DEFAULT_SETTINGS = {
     budgetTotale: 400,
@@ -250,11 +250,21 @@
       if (player) {
         const key = normalizeMatchKey(player.n, player.s);
         if (!sync.ignoreKeys.includes(key)) sync.ignoreKeys.push(key);
+        showToast(`${player.n} rimosso e disattivato dalla sincronizzazione automatica. Puoi riattivarlo dal pannello "Asta Live".`);
       }
     }
     roster = roster.filter(r => r.id !== id);
     saveState();
     renderAll();
+  }
+
+  // Riattiva la sincronizzazione automatica per un giocatore rimosso a mano in precedenza, e
+  // ricontrolla subito cosi' torna in rosa immediatamente se risulta ancora acquistato.
+  function unignoreKey(key) {
+    sync.ignoreKeys = sync.ignoreKeys.filter(k => k !== key);
+    saveState();
+    renderSyncPanel();
+    syncTick();
   }
 
   function setPrice(id, price) {
@@ -1068,6 +1078,24 @@
     } else {
       errEl.hidden = true;
     }
+
+    const ignoredWrap = document.getElementById('sync-ignored');
+    const ignoredList = document.getElementById('sync-ignored-list');
+    const keys = sync.ignoreKeys || [];
+    ignoredWrap.hidden = keys.length === 0;
+    ignoredList.innerHTML = keys.map(key => {
+      const [name, team] = key.split('|');
+      return `
+        <span class="sync-ignored-chip">
+          ${escapeHtml(titleCase(name))} <span class="sync-ignored-team">(${escapeHtml(titleCase(team))})</span>
+          <button type="button" class="sync-ignored-undo" data-unignore="${escapeHtml(key)}" title="Riattiva la sincronizzazione automatica per questo giocatore">Includi di nuovo</button>
+        </span>
+      `;
+    }).join('');
+  }
+
+  function titleCase(str) {
+    return String(str || '').replace(/\b\w/g, c => c.toUpperCase());
   }
 
   function wireSync() {
@@ -1075,11 +1103,25 @@
     document.getElementById('btn-sync-link').addEventListener('click', linkSyncTeam);
     document.getElementById('btn-sync-now').addEventListener('click', () => syncTick());
     document.getElementById('btn-sync-unlink').addEventListener('click', unlinkSyncTeam);
+    document.getElementById('sync-ignored-list').addEventListener('click', e => {
+      const btn = e.target.closest('[data-unignore]');
+      if (btn) unignoreKey(btn.dataset.unignore);
+    });
 
+    // Il polling resta sempre attivo mentre una squadra e' collegata: durante un'asta live
+    // l'utente tiene spesso questa scheda in background (guarda la stanza dell'asta su
+    // un'altra scheda/dispositivo), e fermare il polling quando la pagina non e' in primo
+    // piano vuol dire perdere acquisti per minuti interi. In piu' facciamo un refresh
+    // immediato non appena la pagina torna visibile, cosi' l'utente vede subito lo stato
+    // aggiornato invece di aspettare il prossimo tick.
     document.addEventListener('visibilitychange', () => {
-      if (!sync.teamId) return;
-      if (document.hidden) stopPolling();
-      else startPolling();
+      if (sync.teamId && document.visibilityState === 'visible') syncTick();
+    });
+
+    // Se la connessione cade (rete della sede dell'asta, cambio wifi/dati) e poi torna,
+    // ricontrolliamo subito invece di aspettare fino a SYNC_POLL_INTERVAL_MS.
+    window.addEventListener('online', () => {
+      if (sync.teamId) syncTick();
     });
   }
 
