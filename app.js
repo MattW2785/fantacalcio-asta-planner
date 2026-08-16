@@ -157,7 +157,9 @@
   }
 
   function priceRange(qa, factor) {
-    const min = Math.max(1, Math.round(qa * factor * 0.75));
+    // Il minimo consigliato non scende mai a/sotto la quotazione: in un'asta a rialzo si parte
+    // da lì, quindi il prezzo "atteso" realistico è sempre almeno quotazione+1.
+    const min = Math.max(1, qa + 1, Math.round(qa * factor * 0.75));
     const max = Math.max(min + 1, Math.round(qa * factor * 1.6));
     return { min, max };
   }

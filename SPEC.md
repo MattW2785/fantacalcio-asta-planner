@@ -42,10 +42,12 @@ budgetRuolo = (percentualeRuolo[r] / 100) * budgetTotale * numeroSquadre
 
 fattoreMercatoRuolo = (budgetRuolo / qaSumRuolo) * (correzionePct / 100)   // correzionePct editabile, default 100
 
-prezzoMin = max(1, round(qa * fattoreMercatoRuolo * 0.75))
+prezzoMin = max(1, qa + 1, round(qa * fattoreMercatoRuolo * 0.75))
 prezzoMax = max(prezzoMin + 1, round(qa * fattoreMercatoRuolo * 1.6))
 ```
 Mostrare il fattore calcolato per ciascun ruolo (es. "fattore reparto: 2.06x quot.") e permettere all'utente di applicare una correzione percentuale globale (`correzionePct`, default 100%) per tarare tutti i range in base a come si comporta storicamente la propria lega — se i prezzi finali sono sistematicamente più alti o più bassi del previsto.
+
+**Il minimo non scende mai a/sotto la quotazione** (`qa + 1` come pavimento assoluto, anche quando il fattore di ruolo è basso): in un'asta a rialzo si parte comunque da lì, quindi anche per i ruoli col fattore più basso (tipicamente P/D) il prezzo "atteso" mostrato resta sempre sopra la quotazione, mai uguale o sotto — su richiesta esplicita dell'utente, che sovrascrive il comportamento originale (in cui un fattore < 1.33x poteva produrre un minimo pari o inferiore alla quotazione).
 
 ### 2. Indice di convenienza ("rapporto qualità/prezzo")
 ```
