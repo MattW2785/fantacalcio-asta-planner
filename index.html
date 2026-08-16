@@ -201,6 +201,14 @@ if ("serviceWorker" in navigator) {
         <button type="button" class="btn btn-remove" id="btn-clear-players">Svuota listone</button>
       </div>
       <p class="hint import-hint">Colonne riconosciute automaticamente: <code>Id</code> (opzionale), <code>R</code>/Ruolo (P/D/C/A), <code>Nome</code>, <code>Squadra</code>, <code>Qt.A</code>/Quotazione, <code>FVM</code> — funziona con l'export ufficiale "Quotazioni Fantacalcio" di fantacalcio.it. Se il file ha più fogli uso quello chiamato "Tutti" se presente, altrimenti il primo. La regola off-limits (top 5 quotazione per D/C/A) viene ricalcolata automaticamente. Caricare un nuovo file <strong>sostituisce il listone attuale e azzera la rosa</strong>.</p>
+
+      <div class="import-row">
+        <div class="import-status" id="stats-import-status">Statistiche non caricate: le colonne Media e Rendimento non sono disponibili, resta solo la Convenienza (FVM/quotazione).</div>
+        <label class="btn btn-add import-btn" for="stats-file-input">Carica statistiche (Excel/CSV)</label>
+        <input type="file" id="stats-file-input" accept=".xlsx,.xls,.csv" hidden>
+        <button type="button" class="btn btn-remove" id="btn-clear-stats" disabled>Svuota statistiche</button>
+      </div>
+      <p class="hint import-hint">Import opzionale, separato dal listone: colonne riconosciute <code>Nome</code>, <code>Squadra</code>, <code>Mv</code> (Media voto), <code>Fm</code> (Fantamedia), <code>Gf</code>/<code>Ass</code>/<code>Amm</code>/<code>Esp</code> — funziona con l'export ufficiale "Statistiche Fantacalcio" di fantacalcio.it. La colonna <strong>Rendimento</strong> in tabella mostra la Fantamedia ufficiale: già calcolata dalla lega con gol e assist pesati molto più delle ammonizioni/espulsioni (vedi regole in SPEC.md), quindi mette in automatico in primo piano chi rende di più — appena carichi le statistiche l'ordinamento della tabella passa a Rendimento.</p>
     </div>
 
     <div id="players-empty-state" class="players-empty-state">Carica un file Excel o CSV per iniziare — vedi sopra.</div>
@@ -227,6 +235,8 @@ if ("serviceWorker" in navigator) {
               <th>Squadra</th>
               <th class="sortable" data-sort="qa">Quot.</th>
               <th class="sortable" data-sort="fvm">FVM</th>
+              <th class="sortable" data-sort="mv">Media</th>
+              <th class="sortable" data-sort="fm">Rendimento</th>
               <th class="sortable" data-sort="conv">Convenienza</th>
               <th>Range prezzo</th>
               <th></th>
@@ -321,6 +331,6 @@ if ("serviceWorker" in navigator) {
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/tesseract.min.js"></script>
-<script src="app.js?v=20260816-3"></script>
+<script src="app.js?v=20260816-4"></script>
 </body>
 </html>

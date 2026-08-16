@@ -26,7 +26,7 @@ Nessun listone incorporato nell'app: il listone si carica dall'utente tramite un
 - **Budget**: 400 FantaMilioni (FM) totali, editabile dall'utente (default 400)
 - **Numero squadre in lega**: l'utente ha dichiarato 6 (il regolamento parla di 8, discrepanza nota) — rendere il numero di squadre **configurabile**, default 6, perché influenza la scarsità/il mercato
 - **Regola "off-limits"**: i primi 5 giocatori per quotazione (`qa`) più alta in ciascuno dei 3 reparti di movimento (D, C, A — NON i portieri) non sono acquistabili in nessuna sessione di mercato. Ricalcolata automaticamente a ogni import del listone (funzione `recomputeExclFlags` in `app.js`): per ogni ruolo in [D, C, A], prendere i 5 `qa` più alti e flaggare quei giocatori come `excl: true`.
-- **Bonus/malus di scoring** (utile come contesto, non serve calcolarli sui singoli giocatori perché non abbiamo dati per-partita): gol +3, assist +1 (tutti gli assist valgono uguale), ammonizione -0.5, espulsione -1, autogol -2, rigore parato +3, rigore sbagliato -3, gol subito -1 (portieri), porta inviolata +1 (modificatore difesa attivo), bonus capitano attivo, fattore campo non attivo.
+- **Bonus/malus di scoring**: gol +3, assist +1 (tutti gli assist valgono uguale), ammonizione -0.5, espulsione -1, autogol -2, rigore parato +3, rigore sbagliato -3, gol subito -1 (portieri), porta inviolata +1 (modificatore difesa attivo), bonus capitano attivo, fattore campo non attivo. Questi pesi non vengono ricalcolati a mano: sono già applicati dalla `Fm` (Fantamedia) ufficiale nell'import statistiche (vedi sotto), che li usa esattamente così.
 
 ## Logica di valutazione da implementare
 
@@ -53,6 +53,13 @@ convenienza = fvm / max(qa, 1)
 ```
 Calcolare il **percentile di convenienza all'interno dello stesso ruolo** (non confrontare ruoli diversi tra loro, hanno scale di FVM diverse) e usarlo per colorare/evidenziare i migliori affari (es. top 20% del ruolo = "ottimo affare", verde; medio = giallo; basso = grigio).
 
+### 2bis. Rendimento reale (media voto, gol, assist, cartellini)
+Import **separato e opzionale** dal listone: pulsante "Carica statistiche (Excel/CSV)" nel pannello "Listone giocatori", stesso meccanismo di parsing del listone (SheetJS, foglio "Tutti" se presente, ricerca automatica della riga di intestazione), colonne riconosciute `Nome`, `Squadra`, `Mv` (Media voto), `Fm` (Fantamedia), `Gf`, `Gs`, `Ass`, `Amm`, `Esp`, `Rp`, `Au` — compatibile con l'export ufficiale "Statistiche Fantacalcio" di fantacalcio.it. Abbinato al listone per `Id` (i due export condividono la numerazione), con fallback per nome+squadra normalizzati.
+
+**Nessuna formula inventata**: la colonna "Rendimento" mostra direttamente la `Fm` (Fantamedia) ufficiale già calcolata da fantacalcio.it con i pesi del punto "Regole della lega" qui sopra (gol +3, assist +1, ammonizione -0.5, espulsione -1, gol subito -1 per i portieri, ecc.) — non va ricalcolata, ed essendo gol/assist pesati molto più delle ammonizioni/espulsioni, mette già "in secondo piano" chi prende cartellini senza bisogno di logica aggiuntiva. La colonna "Media" mostra la `Mv` (media voto) grezza. Percentile per ruolo come al punto 2 (top 20% = "ottimo rendimento").
+
+**Focus automatico**: appena le statistiche vengono caricate, l'ordinamento della tabella passa da quotazione a Rendimento decrescente, così i giocatori con media voto alta e tanti gol/assist sono i primi che si vedono senza dover configurare nulla — resta comunque possibile ordinare per qualunque colonna. Giocatori del listone senza statistiche corrispondenti mostrano "—" in Media/Rendimento ma restano visibili normalmente (Convenienza e range prezzo non dipendono dalle statistiche).
+
 ### 3. Budget consigliato per ruolo
 Percentuali di default modificabili dall'utente (devono sempre sommare 100%). Il regolamento suggerisce genericamente 6/16/34/44, ma applicate a questo listone producono fattori di mercato per ruolo molto squilibrati (P 0.74x, D 0.90x, C 1.51x, A 2.06x — vedi punto 1). I default sono quindi calibrati sui dati: proporzionali alla somma delle quotazioni (`qa`) dei giocatori realmente acquistabili che riempirebbero ciascun reparto (slot ruolo × numero squadre, esclusi gli off-limits), così il fattore di mercato risulta uniforme (~1.4x) su tutti i ruoli invece che concentrato su centrocampo/attacco:
 - Portieri: 12%
@@ -65,12 +72,12 @@ Percentuali di default modificabili dall'utente (devono sempre sommare 100%). Il
 ## Funzionalità richieste
 1. **Dashboard riepilogo** in alto: budget totale, speso finora, rimanente, slot rosa riempiti/totali per ruolo (3P/8D/8C/6A) — deve aggiornarsi live man mano che si aggiungono/rimuovono giocatori.
 2. **Pannello impostazioni**: budget totale, numero squadre, override fattore mercato, percentuali budget per ruolo (con validazione somma=100%).
-3. **Tabella giocatori** filtrabile per ruolo (tab P/D/C/A), con ricerca per nome/squadra, ordinabile per FVM, quotazione, convenienza. Colonne: nome, squadra, quotazione (qa), FVM, convenienza (con indicatore colorato), range prezzo consigliato, azione "aggiungi alla rosa".
+3. **Tabella giocatori** filtrabile per ruolo (tab P/D/C/A), con ricerca per nome/squadra, ordinabile per FVM, quotazione, media voto, rendimento, convenienza. Colonne: nome, squadra, quotazione (qa), FVM, media voto, rendimento (vedi punto 2bis, solo se le statistiche sono state importate — altrimenti "—"), convenienza (con indicatore colorato), range prezzo consigliato, azione "aggiungi alla rosa".
    - I giocatori con `excl: true` vanno mostrati ma disabilitati/in grigio con badge "non acquistabile" (tooltip che spiega la regola).
    - Bloccare l'aggiunta se lo slot del ruolo è già pieno o se il budget rimanente non copre nemmeno 1 credito per gli slot ancora vuoti (mantenere sempre almeno 1 credito per ogni slot vuoto rimanente).
 4. **La mia rosa**: pannello/sezione con i giocatori selezionati raggruppati per ruolo, prezzo pagato (editabile, l'utente inserisce il prezzo reale di aggiudicazione in asta), possibilità di rimuovere.
 5. **Persistenza**: salvare rosa e impostazioni in modo che sopravvivano al refresh (localStorage se è una vera web app locale; se sviluppata come artifact Claude, niente localStorage — usare lo stato in memoria o l'API di storage fornita dalla piattaforma).
-6. **Nessun dato deve essere inventato**: tutti i calcoli derivano da `qa` e `fvm` presenti nel dataset.
+6. **Nessun dato deve essere inventato**: tutti i calcoli derivano da `qa`/`fvm` del listone e, se importate, da `Mv`/`Fm` reali delle statistiche — nessuna formula sostitutiva quando mancano.
 7. **Probabili titolari**: un piccolo simbolo (● verde) accanto al nome nella tabella indica i giocatori individuati come probabili titolari. **Nessun fallback automatico**: il pallino (e la vista "sfoglia" del pannello dedicato) restano vuoti finché l'utente non importa e **conferma** un PDF nel pannello "Probabili titolari" (vedi sezione dedicata sotto) — così non si mostra mai un dato potenzialmente vecchio come se fosse affidabile. Un pulsante "Svuota titolari" azzera l'import (il pallino torna a non comparire).
 
    Il pannello "Probabili titolari" permette inoltre di **sfogliare** i titolari correnti filtrando per ruolo e per squadra.

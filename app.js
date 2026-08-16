@@ -53,6 +53,8 @@
   let roster = initial.roster; // [{id, pricePaid, synced?}]
   let PLAYERS_DATA = initial.players; // caricato da file Excel/CSV, nessun listone incorporato
   let playersMeta = initial.playersMeta; // { fileName, importedAt } | null
+  let STATS_DATA = initial.stats; // statistiche reali (Mv/Fm/Gf/Ass/Amm/Esp/...), import separato e opzionale
+  let statsMeta = initial.statsMeta; // { fileName, importedAt } | null
   let sync = initial.sync; // collegamento con Asta Live (vedi DEFAULT_SYNC)
   // Probabili titolari importati da PDF (vedi sezione dedicata più sotto): quando presente,
   // sostituisce integralmente il fallback statico LIKELY_STARTERS di starters.js.
@@ -80,20 +82,41 @@
       const key = normalizeMatchKey(p.n, p.s);
       if (!matchIndexByKey.has(key)) matchIndexByKey.set(key, p);
     });
+    rebuildStatsIndex();
     computeConvenienzaTiers();
+    computeRendimentoTiers();
+  }
+
+  // Statistiche reali (Mv/Fm/...) abbinate al listone per Id, con fallback nome+squadra
+  // normalizzati (i due file di fantacalcio.it di solito condividono gli Id, ma non è garantito).
+  let statsById = new Map();
+  let statsByNameTeam = new Map();
+  function rebuildStatsIndex() {
+    statsById = new Map(STATS_DATA.map(s => [s.id, s]));
+    statsByNameTeam = new Map();
+    STATS_DATA.forEach(s => {
+      const key = normalizeMatchKey(s.n, s.s);
+      if (!statsByNameTeam.has(key)) statsByNameTeam.set(key, s);
+    });
+  }
+
+  function statsForPlayer(p) {
+    return statsById.get(p.id) || statsByNameTeam.get(normalizeMatchKey(p.n, p.s)) || null;
   }
 
   // ---------- Persistence ----------
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
+      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, stats: [], statsMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
       const parsed = JSON.parse(raw);
       return {
         settings: { ...DEFAULT_SETTINGS, ...parsed.settings, pct: { ...DEFAULT_SETTINGS.pct, ...(parsed.settings && parsed.settings.pct) } },
         roster: Array.isArray(parsed.roster) ? parsed.roster : [],
         players: Array.isArray(parsed.players) ? parsed.players : [],
         playersMeta: parsed.playersMeta || null,
+        stats: Array.isArray(parsed.stats) ? parsed.stats : [],
+        statsMeta: parsed.statsMeta || null,
         sync: {
           ...DEFAULT_SYNC,
           ...(parsed.sync || {}),
@@ -102,12 +125,12 @@
         titolariImport: (parsed.titolariImport && Array.isArray(parsed.titolariImport.entries)) ? parsed.titolariImport : null
       };
     } catch (e) {
-      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
+      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, stats: [], statsMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
     }
   }
 
   function saveState() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta, sync, titolariImport }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta, stats: STATS_DATA, statsMeta, sync, titolariImport }));
   }
 
   // ---------- Derived calculations ----------
@@ -162,6 +185,43 @@
       });
     });
     convenienzaTiers = map;
+  }
+
+  // Media voto e Fantamedia reali (da import "Statistiche Fantacalcio", opzionale — vedi
+  // wireStatsImport). La Fantamedia è già il valore ufficiale calcolato da fantacalcio.it con
+  // le regole di punteggio della lega (gol +3, assist +1, ammonizione -0.5, espulsione -1, gol
+  // subito -1 per i portieri, ecc. — vedi SPEC.md "Regole della lega"): non va ricalcolata,
+  // riflette già "media voto alta + molti gol/assist, cartellini pesano poco" chiesto per il
+  // focus automatico, per ogni ruolo portieri inclusi (gol subiti già scontati lì dentro).
+  function mediaVoto(p) {
+    const s = statsForPlayer(p);
+    return s && s.pv > 0 ? s.mv : null;
+  }
+
+  function rendimento(p) {
+    const s = statsForPlayer(p);
+    return s && s.pv > 0 ? s.fm : null;
+  }
+
+  // percentile tiers per role, solo tra i giocatori con statistiche disponibili
+  let rendimentoTiers = null; // Map<id, 'ottimo'|'buono'|'basso'>
+  function computeRendimentoTiers() {
+    const map = new Map();
+    ROLES.forEach(role => {
+      const list = PLAYERS_DATA.filter(p => p.r === role && rendimento(p) !== null)
+        .map(p => ({ id: p.id, fm: rendimento(p) }))
+        .sort((a, b) => b.fm - a.fm);
+      const n = list.length;
+      list.forEach((entry, idx) => {
+        const fraction = (idx + 1) / n;
+        let tier;
+        if (fraction <= 0.2) tier = 'ottimo';
+        else if (fraction <= 0.5) tier = 'buono';
+        else tier = 'basso';
+        map.set(entry.id, tier);
+      });
+    });
+    rendimentoTiers = map;
   }
 
   function filledCounts() {
@@ -466,6 +526,8 @@
       let va, vb;
       if (sortKey === 'qa') { va = a.qa; vb = b.qa; }
       else if (sortKey === 'fvm') { va = a.fvm; vb = b.fvm; }
+      else if (sortKey === 'mv') { va = mediaVoto(a) ?? -Infinity; vb = mediaVoto(b) ?? -Infinity; }
+      else if (sortKey === 'fm') { va = rendimento(a) ?? -Infinity; vb = rendimento(b) ?? -Infinity; }
       else { va = convenienza(a); vb = convenienza(b); }
       return sortDir === 'asc' ? va - vb : vb - va;
     });
@@ -484,7 +546,7 @@
 
     if (list.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="7" class="no-results">Nessun giocatore trovato.</td>`;
+      tr.innerHTML = `<td colspan="9" class="no-results">Nessun giocatore trovato.</td>`;
       tbody.appendChild(tr);
       return;
     }
@@ -496,6 +558,14 @@
       const tierLabel = { ottimo: 'Ottimo affare', buono: 'Buon rapporto', basso: 'Nella media' }[tier];
       const range = priceRange(p.qa, roleFactor);
       const conv = convenienza(p);
+
+      const mv = mediaVoto(p);
+      const fm = rendimento(p);
+      const rendTier = rendimentoTiers.get(p.id);
+      const rendTierLabel = { ottimo: 'Ottimo rendimento', buono: 'Buon rendimento', basso: 'Nella media' }[rendTier];
+      const rendCell = fm !== null
+        ? `<span class="conv-badge conv-${rendTier}"><span class="conv-dot"></span>${fm.toFixed(2)} · ${rendTierLabel}</span>`
+        : '<span class="hint">—</span>';
 
       if (p.excl) tr.classList.add('excluded');
 
@@ -517,6 +587,8 @@
         <td>${escapeHtml(p.s)}</td>
         <td class="mono-cell">${p.qa}</td>
         <td class="mono-cell">${p.fvm}</td>
+        <td class="mono-cell">${mv !== null ? mv.toFixed(2) : '—'}</td>
+        <td>${rendCell}</td>
         <td><span class="conv-badge conv-${tier}"><span class="conv-dot"></span>${conv.toFixed(1)} · ${tierLabel}</span></td>
         <td class="price-range">${range.min}&ndash;${range.max} FM</td>
         <td><button class="btn btn-add" data-add="${p.id}" ${disableAdd ? 'disabled' : ''}>${addLabel}</button></td>
@@ -614,6 +686,7 @@
   function renderAll() {
     document.body.classList.toggle('no-players', PLAYERS_DATA.length === 0);
     renderImportStatus();
+    renderStatsImportStatus();
     renderDashboard();
     renderSettings();
     renderTable();
@@ -816,6 +889,153 @@
       if (file) handleFileImport(file);
     });
     document.getElementById('btn-clear-players').addEventListener('click', clearPlayers);
+  }
+
+  // ---------- Import statistiche reali da Excel/CSV (opzionale) ----------
+  // Stesso pattern del listone: file "Statistiche Fantacalcio" ufficiale, foglio "Tutti" se
+  // presente, riga di intestazione cercata nelle prime righe. Import indipendente: se manca,
+  // il resto dell'app funziona come prima (solo senza le colonne Media/Rendimento).
+  const STATS_HEADER_ALIASES = {
+    id: ['id'],
+    n: ['nome', 'giocatore', 'calciatore'],
+    s: ['squadra', 'team'],
+    pv: ['pv', 'presenze'],
+    mv: ['mv', 'mediavoto'],
+    fm: ['fm', 'fantamedia'],
+    gf: ['gf', 'golfatti'],
+    gs: ['gs', 'golsubiti'],
+    ass: ['ass', 'assist'],
+    amm: ['amm', 'ammonizioni'],
+    esp: ['esp', 'espulsioni'],
+    rp: ['rp', 'rigoriparati'],
+    au: ['au', 'autogol']
+  };
+
+  function findStatsHeaderRow(aoa) {
+    const limit = Math.min(aoa.length, 15);
+    for (let i = 0; i < limit; i++) {
+      const normCells = (aoa[i] || []).map(normalizeHeader);
+      const hasNome = normCells.some(c => STATS_HEADER_ALIASES.n.includes(c));
+      const hasSquadra = normCells.some(c => STATS_HEADER_ALIASES.s.includes(c));
+      const hasMv = normCells.some(c => STATS_HEADER_ALIASES.mv.includes(c));
+      if (hasNome && hasSquadra && hasMv) return i;
+    }
+    return -1;
+  }
+
+  function buildStatsColumnMap(headerRow) {
+    const normCells = headerRow.map(normalizeHeader);
+    const map = {};
+    Object.keys(STATS_HEADER_ALIASES).forEach(field => {
+      const idx = normCells.findIndex(c => STATS_HEADER_ALIASES[field].includes(c));
+      if (idx !== -1) map[field] = idx;
+    });
+    return map;
+  }
+
+  function parseStatsFromAOA(aoa) {
+    const headerIdx = findStatsHeaderRow(aoa);
+    if (headerIdx === -1) {
+      throw new Error('Non trovo le colonne attese (Nome, Squadra, Mv) nelle prime righe del file. Controlla il formato.');
+    }
+    const colMap = buildStatsColumnMap(aoa[headerIdx]);
+    if (colMap.n === undefined || colMap.s === undefined || colMap.mv === undefined) {
+      throw new Error('Colonne obbligatorie mancanti (Nome, Squadra, Mv).');
+    }
+
+    const num = (row, key) => (colMap[key] !== undefined ? Number(row[colMap[key]]) || 0 : 0);
+    const stats = [];
+    let skipped = 0;
+
+    for (let i = headerIdx + 1; i < aoa.length; i++) {
+      const row = aoa[i];
+      if (!row || row.length === 0) continue;
+      const nome = row[colMap.n] != null ? String(row[colMap.n]).trim() : '';
+      const squadra = row[colMap.s] != null ? String(row[colMap.s]).trim() : '';
+      if (!nome || !squadra) { if (nome || squadra) skipped++; continue; }
+
+      const id = colMap.id !== undefined ? parseInt(row[colMap.id], 10) : NaN;
+      stats.push({
+        id: Number.isFinite(id) ? id : null,
+        n: nome, s: squadra,
+        pv: num(row, 'pv'), mv: num(row, 'mv'), fm: num(row, 'fm'),
+        gf: num(row, 'gf'), gs: num(row, 'gs'), ass: num(row, 'ass'),
+        amm: num(row, 'amm'), esp: num(row, 'esp'), rp: num(row, 'rp'), au: num(row, 'au')
+      });
+    }
+
+    if (stats.length === 0) {
+      throw new Error('Nessuna riga valida trovata nel file.');
+    }
+    return { stats, skipped };
+  }
+
+  async function handleStatsFileImport(file) {
+    let stats, skipped;
+    try {
+      const buffer = await readFileAsArrayBuffer(file);
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet = pickSheet(workbook);
+      const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+      ({ stats, skipped } = parseStatsFromAOA(aoa));
+    } catch (err) {
+      showToast(`Import statistiche fallito: ${err.message || err}`, 'error');
+      return;
+    }
+
+    if (STATS_DATA.length > 0) {
+      if (!(await showConfirm('Caricare questo file sostituirà le statistiche attualmente caricate. Continuare?'))) return;
+    }
+
+    STATS_DATA = stats;
+    statsMeta = { fileName: file.name, importedAt: new Date().toISOString() };
+    rebuildDerivedIndexes();
+    // "Focus automatico" su chi rende di più (media voto + gol/assist, cartellini già pesati
+    // poco nella Fantamedia ufficiale) appena le statistiche diventano disponibili.
+    sortKey = 'fm';
+    sortDir = 'desc';
+    saveState();
+    renderAll();
+
+    const matched = PLAYERS_DATA.filter(p => statsForPlayer(p) !== null).length;
+    const skippedMsg = skipped > 0 ? ` (${skipped} righe ignorate)` : '';
+    showToast(`Statistiche caricate: ${stats.length} giocatori, ${matched} abbinati al listone${skippedMsg}.`);
+  }
+
+  async function clearStats() {
+    if (STATS_DATA.length === 0) return;
+    if (!(await showConfirm('Svuotare le statistiche caricate? Le colonne Media/Rendimento spariranno dal Listone.'))) return;
+    STATS_DATA = [];
+    statsMeta = null;
+    rebuildDerivedIndexes();
+    saveState();
+    renderAll();
+    showToast('Statistiche svuotate.');
+  }
+
+  function renderStatsImportStatus() {
+    const el = document.getElementById('stats-import-status');
+    const clearBtn = document.getElementById('btn-clear-stats');
+    if (STATS_DATA.length === 0) {
+      el.textContent = 'Statistiche non caricate: le colonne Media e Rendimento non sono disponibili, resta solo la Convenienza (FVM/quotazione).';
+      el.classList.remove('loaded');
+      clearBtn.disabled = true;
+      return;
+    }
+    const matched = PLAYERS_DATA.filter(p => statsForPlayer(p) !== null).length;
+    const when = statsMeta && statsMeta.importedAt ? new Date(statsMeta.importedAt).toLocaleString('it-IT') : '';
+    el.textContent = `${statsMeta ? statsMeta.fileName : ''}: ${STATS_DATA.length} giocatori, ${matched} abbinati al listone${when ? ' · caricato ' + when : ''}.`;
+    el.classList.add('loaded');
+    clearBtn.disabled = false;
+  }
+
+  function wireStatsImport() {
+    document.getElementById('stats-file-input').addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (file) handleStatsFileImport(file);
+    });
+    document.getElementById('btn-clear-stats').addEventListener('click', clearStats);
   }
 
   // ---------- Event wiring ----------
@@ -1851,6 +2071,7 @@
     rebuildDerivedIndexes();
     wireEvents();
     wireImport();
+    wireStatsImport();
     wireSync();
     wireTitolariPanel();
     renderAll();
