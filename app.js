@@ -1537,9 +1537,64 @@
     }
   }
 
-  // ---- Revisione (obbligatoria prima di salvare, vedi SPEC §6) ----
+  // ---- Editor titolari per squadra: casella di spunta per ogni giocatore del listone di
+  // quella squadra/ruolo, salvataggio squadra-per-squadra (non serve rivedere tutte le 20
+  // squadre in un colpo solo, né rifare il PDF per correggere una sola squadra dopo). Stesso
+  // componente sia nella revisione post-import (con suggerimenti dall'OCR) sia nella modifica
+  // manuale dalla vista "sfoglia" (senza PDF, si spunta direttamente dal listone).
 
-  let pendingReview = null; // { teams:[{team, rows:[{role,ocrText,candidates,matchedId,included}]}], stats:{...}, fileName }
+  function renderTeamRoleCheckboxes(team, checkedIds) {
+    const groups = ROLES.map(role => {
+      const players = PLAYERS_DATA
+        .filter(p => p.r === role && normalizeNameForMatch(p.s) === normalizeNameForMatch(team))
+        .sort((a, b) => a.n.localeCompare(b.n, 'it'));
+      if (players.length === 0) return '';
+      return `
+        <div class="titolari-role-group">
+          <span class="role-tag role-${role}">${role}</span>
+          <div class="titolari-checkbox-list">
+            ${players.map(p => `
+              <label class="titolari-checkbox-item">
+                <input type="checkbox" value="${p.id}" ${checkedIds.has(p.id) ? 'checked' : ''}>
+                <span>${escapeHtml(p.n)}</span>
+              </label>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+    return groups || '<p class="hint">Nessun giocatore di questa squadra nel listone.</p>';
+  }
+
+  function collectCheckedIds(container) {
+    return new Set([...container.querySelectorAll('.titolari-checkbox-item input:checked')].map(el => +el.value));
+  }
+
+  // Sostituisce solo i titolari SALVATI di questa squadra, lasciando intatti quelli delle
+  // altre squadre — è quello che rende possibile salvare/correggere una squadra alla volta.
+  function upsertTitolariForTeam(team, checkedIds) {
+    const otherEntries = (titolariImport ? titolariImport.entries : []).filter(e => normalizeNameForMatch(e.s) !== normalizeNameForMatch(team));
+    const newEntries = [...checkedIds].map(id => playersById.get(id)).filter(Boolean).map(p => ({ id: p.id, n: p.n, s: p.s, r: p.r }));
+    const entries = otherEntries.concat(newEntries);
+    const prevMeta = titolariImport && titolariImport.meta;
+    titolariImport = {
+      entries,
+      meta: {
+        updatedAt: new Date().toISOString(),
+        fileName: (prevMeta && prevMeta.fileName) || (pendingReview && pendingReview.fileName) || null,
+        teamsParsed: new Set(entries.map(e => e.s)).size,
+        playersMatched: entries.length
+      }
+    };
+    saveState();
+  }
+
+  function refreshAfterTitolariChange() {
+    renderTitolariImportStatus();
+    renderTable();
+  }
+
+  // ---- Revisione dopo l'import PDF: una card per squadra, con salvataggio indipendente ----
+
+  let pendingReview = null; // { teams:[{team, suggestedIds:Set, uncertain:[...], collapsed, saved}], stats:{...}, fileName }
 
   function buildPendingReview(panelResults) {
     const teams = [];
@@ -1549,26 +1604,40 @@
       const teamLabel = matchTeamName(res.team) || res.team || 'Squadra non riconosciuta';
       if (!res.team || res.dotsFound === 0) teamsFailed++;
 
-      const rows = res.matched.map(m => {
+      const suggestedIds = new Set();
+      const uncertain = [];
+      res.matched.forEach(m => {
         const candidates = PLAYERS_DATA.filter(p => p.r === m.role && normalizeNameForMatch(p.s) === normalizeNameForMatch(teamLabel));
         const auto = bestNameMatch(m.ocrText, candidates);
-        if (auto) playersMatched++; else playersUnmatched++;
-        return { role: m.role, ocrText: m.ocrText, candidates, matchedId: auto ? auto.id : null, included: true };
+        if (auto) { suggestedIds.add(auto.id); playersMatched++; }
+        else { uncertain.push(m.ocrText); playersUnmatched++; }
       });
 
-      teams.push({ team: teamLabel, rows });
+      teams.push({ team: teamLabel, suggestedIds, uncertain, collapsed: false, saved: false });
     });
 
     pendingReview = { teams, stats: { playersMatched, playersUnmatched, teamsParsed: panelResults.length, teamsFailed } };
   }
 
-  function renderPlayerMatchSelect(row, ti, ri) {
-    if (row.candidates.length === 0) {
-      return `<span class="hint">Nessun ${ROLE_LABELS[row.role].toLowerCase()} trovato per questa squadra nel listone</span>`;
-    }
-    const opts = ['<option value="">— seleziona —</option>']
-      .concat(row.candidates.map(p => `<option value="${p.id}" ${p.id === row.matchedId ? 'selected' : ''}>${escapeHtml(p.n)}</option>`));
-    return `<select class="mono-input titolari-match-select" data-team="${ti}" data-row="${ri}">${opts.join('')}</select>`;
+  function renderReviewTeamCard(t, ti) {
+    const uncertainNote = t.uncertain.length
+      ? `<p class="hint titolari-uncertain-hint">Rilevati dal PDF ma non abbinati automaticamente: ${t.uncertain.map(escapeHtml).join(', ')} — spunta a mano qui sotto se corrispondono a un titolare.</p>`
+      : '';
+    return `
+      <div class="titolari-team-card${t.collapsed ? ' collapsed' : ''}" data-team-index="${ti}">
+        <div class="titolari-team-card-header" data-toggle-team="${ti}">
+          <span class="titolari-team-name">${escapeHtml(t.team)}</span>
+          <span class="titolari-saved-badge-slot">${t.saved ? '<span class="titolari-saved-badge">✓ Salvata</span>' : ''}</span>
+          <span class="titolari-team-toggle">${t.collapsed ? '▸' : '▾'}</span>
+        </div>
+        <div class="titolari-team-card-body">
+          ${uncertainNote}
+          ${renderTeamRoleCheckboxes(t.team, t.suggestedIds)}
+          <div class="titolari-team-card-actions">
+            <button type="button" class="btn btn-add titolari-save-team-btn" data-team="${ti}">Salva squadra</button>
+          </div>
+        </div>
+      </div>`;
   }
 
   function renderTitolariReview() {
@@ -1587,114 +1656,67 @@
       `${s.teamsParsed} squadre analizzate — ${s.playersMatched} titolari abbinati automaticamente, ${s.playersUnmatched} da verificare manualmente` +
       (s.teamsFailed ? `, ${s.teamsFailed} squadre non riconosciute` : '') + '.';
 
-    const roleOptions = ROLES.map(r => `<option value="${r}">${r}</option>`).join('');
-    let html = '';
-    pendingReview.teams.forEach((t, ti) => {
-      html += `<tr class="titolari-team-row"><td colspan="4">${escapeHtml(t.team)} <span class="hint">(${t.rows.length} rilevati)</span></td></tr>`;
-      t.rows.forEach((r, ri) => {
-        html += `
-          <tr class="titolari-review-row${r.matchedId ? '' : ' unmatched'}">
-            <td><input type="checkbox" class="titolari-include" data-team="${ti}" data-row="${ri}" ${r.included ? 'checked' : ''}></td>
-            <td><span class="role-tag role-${r.role}">${r.role}</span></td>
-            <td class="titolari-ocr-text">${escapeHtml(r.ocrText)}</td>
-            <td>${renderPlayerMatchSelect(r, ti, ri)}</td>
-          </tr>`;
-      });
-      html += `
-        <tr class="titolari-add-row" data-team="${ti}">
-          <td></td>
-          <td colspan="3">
-            + Aggiungi titolare mancante:
-            <select class="mono-input titolari-add-role" data-team="${ti}">${roleOptions}</select>
-            <select class="mono-input titolari-add-player" data-team="${ti}"></select>
-            <button type="button" class="btn btn-add titolari-add-btn" data-team="${ti}">Aggiungi</button>
-          </td>
-        </tr>`;
-    });
-    document.getElementById('titolari-review-tbody').innerHTML = html;
-
-    pendingReview.teams.forEach((t, ti) => populateAddPlayerSelect(ti));
+    document.getElementById('titolari-review-teams').innerHTML = pendingReview.teams.map((t, ti) => renderReviewTeamCard(t, ti)).join('');
   }
 
-  function populateAddPlayerSelect(ti) {
-    const team = pendingReview.teams[ti];
-    const roleSel = document.querySelector(`.titolari-add-role[data-team="${ti}"]`);
-    const playerSel = document.querySelector(`.titolari-add-player[data-team="${ti}"]`);
-    if (!roleSel || !playerSel) return;
-    const role = roleSel.value;
-    const usedIds = new Set(team.rows.map(r => r.matchedId).filter(Boolean));
-    const options = PLAYERS_DATA.filter(p => p.r === role && normalizeNameForMatch(p.s) === normalizeNameForMatch(team.team) && !usedIds.has(p.id));
-    playerSel.innerHTML = options.length
-      ? options.map(p => `<option value="${p.id}">${escapeHtml(p.n)}</option>`).join('')
-      : '<option value="">Nessuno disponibile</option>';
+  // Aggiorna badge/collapse di UNA card senza ricostruire l'HTML delle altre: così le
+  // modifiche alle caselle non ancora salvate nelle altre squadre non vengono perse.
+  function updateReviewTeamCardDom(ti) {
+    const card = document.querySelector(`.titolari-team-card[data-team-index="${ti}"]`);
+    if (!card) return;
+    const t = pendingReview.teams[ti];
+    card.classList.toggle('collapsed', t.collapsed);
+    const badgeSlot = card.querySelector('.titolari-saved-badge-slot');
+    if (badgeSlot) badgeSlot.innerHTML = t.saved ? '<span class="titolari-saved-badge">✓ Salvata</span>' : '';
+    const toggleIcon = card.querySelector('.titolari-team-toggle');
+    if (toggleIcon) toggleIcon.textContent = t.collapsed ? '▸' : '▾';
   }
 
-  function wireTitolariReviewTable() {
-    const tbody = document.getElementById('titolari-review-tbody');
-    tbody.addEventListener('change', e => {
-      if (e.target.classList.contains('titolari-include')) {
-        const ti = +e.target.dataset.team, ri = +e.target.dataset.row;
-        pendingReview.teams[ti].rows[ri].included = e.target.checked;
-      } else if (e.target.classList.contains('titolari-match-select')) {
-        const ti = +e.target.dataset.team, ri = +e.target.dataset.row;
-        pendingReview.teams[ti].rows[ri].matchedId = e.target.value ? +e.target.value : null;
-        renderTitolariReview();
-      } else if (e.target.classList.contains('titolari-add-role')) {
-        populateAddPlayerSelect(+e.target.dataset.team);
+  function saveReviewTeamByIndex(ti, opts) {
+    const t = pendingReview.teams[ti];
+    const card = document.querySelector(`.titolari-team-card[data-team-index="${ti}"]`);
+    if (!card) return;
+    const checked = collectCheckedIds(card);
+    upsertTitolariForTeam(t.team, checked);
+    t.saved = true;
+    t.collapsed = true;
+    updateReviewTeamCardDom(ti);
+    if (!(opts && opts.silent)) showToast(`Salvata ${t.team}: ${checked.size} titolari.`);
+  }
+
+  function saveAllReviewTeams() {
+    pendingReview.teams.forEach((t, ti) => saveReviewTeamByIndex(ti, { silent: true }));
+    refreshAfterTitolariChange();
+    showToast(`Salvate tutte le ${pendingReview.teams.length} squadre.`);
+  }
+
+  function wireTitolariReviewTeams() {
+    const container = document.getElementById('titolari-review-teams');
+    container.addEventListener('click', e => {
+      const saveBtn = e.target.closest('.titolari-save-team-btn');
+      if (saveBtn) {
+        saveReviewTeamByIndex(+saveBtn.dataset.team);
+        refreshAfterTitolariChange();
+        return;
+      }
+      const header = e.target.closest('.titolari-team-card-header');
+      if (header) {
+        const ti = +header.dataset.toggleTeam;
+        pendingReview.teams[ti].collapsed = !pendingReview.teams[ti].collapsed;
+        updateReviewTeamCardDom(ti);
       }
     });
-    tbody.addEventListener('click', e => {
-      const btn = e.target.closest('.titolari-add-btn');
-      if (!btn) return;
-      const ti = +btn.dataset.team;
-      const playerSel = document.querySelector(`.titolari-add-player[data-team="${ti}"]`);
-      if (!playerSel || !playerSel.value) return;
-      const player = playersById.get(+playerSel.value);
-      if (!player) return;
-      const team = pendingReview.teams[ti];
-      team.rows.push({
-        role: player.r,
-        ocrText: '(aggiunto a mano)',
-        candidates: PLAYERS_DATA.filter(p => p.r === player.r && normalizeNameForMatch(p.s) === normalizeNameForMatch(team.team)),
-        matchedId: player.id,
-        included: true
-      });
-      renderTitolariReview();
-    });
   }
 
-  function confirmTitolariReview() {
-    if (!pendingReview) return;
-    const entries = [];
-    pendingReview.teams.forEach(t => {
-      t.rows.forEach(r => {
-        if (!r.included || !r.matchedId) return;
-        const p = playersById.get(r.matchedId);
-        if (p) entries.push({ id: p.id, n: p.n, s: p.s, r: p.r });
-      });
-    });
-    if (entries.length === 0) {
-      showToast('Nessun titolare abbinato: import annullato.', 'error');
-      return;
-    }
-    titolariImport = {
-      entries,
-      meta: { importedAt: new Date().toISOString(), fileName: pendingReview.fileName || null, teamsParsed: pendingReview.stats.teamsParsed, playersMatched: entries.length }
-    };
-    pendingReview = null;
-    saveState();
-    renderAll();
-    showToast(`Titolari aggiornati: ${entries.length} giocatori abbinati.`);
-  }
-
-  function cancelTitolariReview() {
+  function closeTitolariReview() {
     pendingReview = null;
     renderTitolariReview();
+    renderTitolariBrowse();
   }
 
   async function clearTitolariImport() {
     if (!titolariImport) { showToast('Nessun import da svuotare.'); return; }
-    if (!(await showConfirm('Svuotare i titolari importati? Il pallino sparirà dal Listone finché non importi di nuovo un PDF.'))) return;
+    if (!(await showConfirm('Svuotare i titolari importati? Il pallino sparirà dal Listone finché non ne salvi di nuovi.'))) return;
     titolariImport = null;
     saveState();
     renderAll();
@@ -1703,20 +1725,21 @@
 
   function renderTitolariImportStatus() {
     const el = document.getElementById('titolari-import-status');
-    if (titolariImport && titolariImport.meta) {
-      const d = new Date(titolariImport.meta.importedAt).toLocaleString('it-IT');
-      el.textContent = `Import attivo: ${titolariImport.meta.playersMatched} titolari da ${titolariImport.meta.teamsParsed} squadre analizzate (${d}).`;
+    if (titolariImport && titolariImport.meta && titolariImport.entries.length) {
+      const d = new Date(titolariImport.meta.updatedAt).toLocaleString('it-IT');
+      el.textContent = `${titolariImport.meta.playersMatched} titolari salvati in ${titolariImport.meta.teamsParsed} squadre (ultimo salvataggio: ${d}).`;
       el.classList.add('loaded');
     } else {
-      el.textContent = 'Nessun titolare importato: nessun pallino mostrato nel Listone finché non carichi e confermi un PDF.';
+      el.textContent = 'Nessun titolare importato: nessun pallino mostrato nel Listone finché non ne salvi.';
       el.classList.remove('loaded');
     }
   }
 
-  // ---- Vista "sfoglia titolari" per ruolo/squadra ----
+  // ---- Vista "sfoglia titolari" per ruolo/squadra + modifica manuale di una squadra ----
 
   let titolariActiveRole = 'P';
   let titolariTeamFilter = '';
+  let manualEditTeam = null;
 
   function renderTitolariBrowse() {
     const map = activeStartersMap();
@@ -1724,13 +1747,14 @@
 
     const teamSelect = document.getElementById('titolari-team-filter');
     if (document.activeElement !== teamSelect) {
-      const teams = [...new Set(rows.map(p => p.s))].sort((a, b) => a.localeCompare(b, 'it'));
+      const teams = [...new Set(PLAYERS_DATA.map(p => p.s))].sort((a, b) => a.localeCompare(b, 'it'));
       const current = teamSelect.value;
       teamSelect.innerHTML = '<option value="">Tutte le squadre</option>' + teams.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
       if (teams.includes(current)) teamSelect.value = current;
     }
 
     document.querySelectorAll('#titolari-role-tabs .role-tab').forEach(t => t.classList.toggle('active', t.dataset.role === titolariActiveRole));
+    document.getElementById('btn-titolari-edit-team').hidden = !titolariTeamFilter || PLAYERS_DATA.length === 0;
 
     const filtered = rows
       .filter(p => p.r === titolariActiveRole)
@@ -1742,6 +1766,39 @@
     document.getElementById('titolari-browse-table').hidden = filtered.length === 0;
   }
 
+  // Modifica diretta di una squadra dalla vista "sfoglia", senza dover ripassare da un PDF:
+  // stesso editor a caselle di spunta della revisione, precompilato con i titolari attuali.
+  function openManualTeamEditor(team) {
+    manualEditTeam = team;
+    const map = activeStartersMap();
+    const checkedIds = new Set(
+      PLAYERS_DATA.filter(p => p.s === team && map[(p.n.trim() + '|' + p.s.trim()).toLowerCase()]).map(p => p.id)
+    );
+    const container = document.getElementById('titolari-team-editor');
+    container.innerHTML = `
+      <div class="titolari-team-card">
+        <div class="titolari-team-card-header">
+          <span class="titolari-team-name">Modifica titolari — ${escapeHtml(team)}</span>
+        </div>
+        <div class="titolari-team-card-body">
+          ${renderTeamRoleCheckboxes(team, checkedIds)}
+          <div class="titolari-team-card-actions">
+            <button type="button" class="btn btn-add" id="btn-titolari-manual-save">Salva squadra</button>
+            <button type="button" class="btn btn-remove" id="btn-titolari-manual-cancel">Annulla</button>
+          </div>
+        </div>
+      </div>`;
+    container.hidden = false;
+    container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function closeManualTeamEditor() {
+    manualEditTeam = null;
+    const container = document.getElementById('titolari-team-editor');
+    container.hidden = true;
+    container.innerHTML = '';
+  }
+
   function wireTitolariPanel() {
     document.getElementById('titolari-file-input').addEventListener('change', e => {
       const file = e.target.files && e.target.files[0];
@@ -1749,9 +1806,9 @@
       if (file) handleTitolariPdfImport(file);
     });
     document.getElementById('btn-clear-titolari').addEventListener('click', clearTitolariImport);
-    document.getElementById('btn-titolari-confirm').addEventListener('click', confirmTitolariReview);
-    document.getElementById('btn-titolari-cancel').addEventListener('click', cancelTitolariReview);
-    wireTitolariReviewTable();
+    document.getElementById('btn-titolari-save-all').addEventListener('click', saveAllReviewTeams);
+    document.getElementById('btn-titolari-close-review').addEventListener('click', closeTitolariReview);
+    wireTitolariReviewTeams();
 
     document.getElementById('titolari-role-tabs').addEventListener('click', e => {
       const btn = e.target.closest('.role-tab');
@@ -1761,7 +1818,25 @@
     });
     document.getElementById('titolari-team-filter').addEventListener('change', e => {
       titolariTeamFilter = e.target.value;
+      closeManualTeamEditor();
       renderTitolariBrowse();
+    });
+    document.getElementById('btn-titolari-edit-team').addEventListener('click', () => {
+      if (titolariTeamFilter) openManualTeamEditor(titolariTeamFilter);
+    });
+    document.getElementById('titolari-team-editor').addEventListener('click', e => {
+      if (e.target.id === 'btn-titolari-manual-save') {
+        const container = document.getElementById('titolari-team-editor');
+        const checked = collectCheckedIds(container);
+        upsertTitolariForTeam(manualEditTeam, checked);
+        const team = manualEditTeam;
+        closeManualTeamEditor();
+        refreshAfterTitolariChange();
+        renderTitolariBrowse();
+        showToast(`Salvata ${team}: ${checked.size} titolari.`);
+      } else if (e.target.id === 'btn-titolari-manual-cancel') {
+        closeManualTeamEditor();
+      }
     });
   }
 

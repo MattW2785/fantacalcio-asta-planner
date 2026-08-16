@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20260816-1">
+<link rel="stylesheet" href="style.css?v=20260816-2">
 <script>
 // Registrato il prima possibile (prima di qualunque altro script): un service worker attivo
 // e' cio' che fa uscire l'app aggiunta alla Home su iOS/iPadOS dalla cache "statica" del
@@ -240,7 +240,7 @@ if ("serviceWorker" in navigator) {
 
   <section class="panel titolari-panel" id="titolari-panel">
     <h2 class="panel-title">Probabili titolari</h2>
-    <p class="hint fm-explainer">Carica l'infografica PDF "Probabili formazioni" di fantacalcio.it (o un file dello stesso formato): l'app riconosce squadra, ruolo e nome di ogni titolare dal colore del pallino nello schema tattico (portieri giallo, difensori verde, centrocampisti blu, attaccanti rosso) e dal testo vicino, poi mostra una schermata di revisione da confermare — nessun dato viene salvato senza il tuo controllo. Serve il listone già caricato per abbinare i nomi riconosciuti ai giocatori.</p>
+    <p class="hint fm-explainer">Carica l'infografica PDF "Probabili formazioni" di fantacalcio.it (o un file dello stesso formato): l'app riconosce squadra, ruolo e nome di ogni titolare dal colore del pallino nello schema tattico (portieri giallo, difensori verde, centrocampisti blu, attaccanti rosso) e dal testo vicino, poi mostra una casella di spunta per squadra da correggere e salvare — nessun dato viene salvato senza il tuo controllo, e puoi salvare una squadra alla volta invece di dover finire tutta la revisione in un colpo solo. Serve il listone già caricato per abbinare i nomi riconosciuti ai giocatori.</p>
 
     <div class="players-import" id="titolari-import">
       <div class="import-row">
@@ -258,23 +258,12 @@ if ("serviceWorker" in navigator) {
 
     <div class="titolari-review" id="titolari-review" hidden>
       <p class="titolari-review-summary" id="titolari-review-summary"></p>
-      <div class="table-wrap">
-        <table class="players-table titolari-review-table" id="titolari-review-table">
-          <thead>
-            <tr>
-              <th></th>
-              <th>Ruolo</th>
-              <th>Rilevato</th>
-              <th>Giocatore abbinato</th>
-            </tr>
-          </thead>
-          <tbody id="titolari-review-tbody"></tbody>
-        </table>
-      </div>
+      <p class="hint">Ogni squadra è già precompilata con quanto rilevato dal PDF: correggi le caselle se serve e salva — puoi farlo una squadra alla volta, oppure salvarle tutte insieme e tornare solo su quelle da correggere.</p>
       <div class="titolari-review-actions">
-        <button type="button" class="btn btn-add" id="btn-titolari-confirm">Conferma import</button>
-        <button type="button" class="btn btn-remove" id="btn-titolari-cancel">Annulla</button>
+        <button type="button" class="btn btn-add" id="btn-titolari-save-all">Salva tutte le squadre</button>
+        <button type="button" class="btn btn-remove" id="btn-titolari-close-review">Chiudi revisione</button>
       </div>
+      <div class="titolari-review-teams" id="titolari-review-teams"></div>
     </div>
 
     <div id="titolari-browse">
@@ -285,9 +274,13 @@ if ("serviceWorker" in navigator) {
           <button class="role-tab" data-role="C">Centrocampisti</button>
           <button class="role-tab" data-role="A">Attaccanti</button>
         </div>
-        <select id="titolari-team-filter" class="mono-input"><option value="">Tutte le squadre</option></select>
+        <div class="titolari-browse-team-controls">
+          <select id="titolari-team-filter" class="mono-input"><option value="">Tutte le squadre</option></select>
+          <button type="button" class="btn" id="btn-titolari-edit-team" hidden>Modifica squadra</button>
+        </div>
       </div>
-      <div id="titolari-empty-state" class="titolari-empty-state" hidden>Nessun probabile titolare disponibile: carica prima il listone giocatori, poi importa e conferma un PDF di probabili formazioni.</div>
+      <div id="titolari-team-editor" class="titolari-team-editor" hidden></div>
+      <div id="titolari-empty-state" class="titolari-empty-state" hidden>Nessun probabile titolare disponibile: carica prima il listone giocatori, poi importa un PDF di probabili formazioni oppure usa "Modifica squadra" qui sopra.</div>
       <div class="table-wrap">
         <table class="players-table" id="titolari-browse-table">
           <thead>
@@ -328,6 +321,6 @@ if ("serviceWorker" in navigator) {
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/tesseract.min.js"></script>
-<script src="app.js?v=20260816-2"></script>
+<script src="app.js?v=20260816-3"></script>
 </body>
 </html>

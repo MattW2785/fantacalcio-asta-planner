@@ -844,31 +844,10 @@ body.no-players #players-data-area { display: none; }
   color: var(--text-secondary);
 }
 
-.titolari-review-table td { vertical-align: middle; }
-
-.titolari-team-row td {
-  padding-top: 1rem;
-  font-family: var(--font-display);
-  letter-spacing: 0.03em;
-  color: var(--gold);
-  border-bottom: 1px solid var(--border);
-  font-size: 0.95rem;
-}
-
-.titolari-review-row.unmatched { background: rgba(217, 97, 74, 0.08); }
-
-.titolari-ocr-text {
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-}
-
-.titolari-add-row select { max-width: 220px; }
-
 .titolari-review-actions {
   display: flex;
   gap: 0.75rem;
-  margin-top: 1rem;
+  margin: 0.75rem 0 1rem;
 }
 
 .titolari-empty-state {
@@ -879,6 +858,110 @@ body.no-players #players-data-area { display: none; }
   border-radius: 6px;
   margin-bottom: 1rem;
 }
+
+/* ---- Card squadra: revisione post-import e modifica manuale ---- */
+.titolari-review-teams {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.titolari-team-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.titolari-team-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.titolari-team-name {
+  font-family: var(--font-display);
+  letter-spacing: 0.03em;
+  color: var(--gold);
+  font-size: 1rem;
+}
+
+.titolari-saved-badge-slot { flex: 1 1 auto; }
+
+.titolari-saved-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--good);
+}
+
+.titolari-team-toggle {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.titolari-team-card-body {
+  padding: 0 0.9rem 0.9rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.titolari-team-card.collapsed .titolari-team-card-body { display: none; }
+
+.titolari-uncertain-hint {
+  margin: 0 0 0.75rem;
+  color: var(--alert);
+}
+
+.titolari-role-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.titolari-role-group:last-of-type { border-bottom: none; }
+
+.titolari-checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  flex: 1 1 auto;
+}
+
+.titolari-checkbox-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.titolari-checkbox-item input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+.titolari-team-card-actions {
+  margin-top: 0.85rem;
+}
+
+.titolari-browse-team-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.titolari-team-editor { margin-bottom: 1rem; }
 
 .btn {
   font-family: var(--font-body);
