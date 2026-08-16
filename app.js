@@ -1155,12 +1155,15 @@
   // del campo o leggere male un nome.
 
   function activeStartersMap() {
+    // Niente fallback su dati statici: il pallino/la vista titolari restano vuoti finché
+    // l'utente non importa e conferma un PDF, cosí non si mostra mai un dato potenzialmente
+    // vecchio come se fosse affidabile.
     if (titolariImport && Array.isArray(titolariImport.entries) && titolariImport.entries.length) {
       const map = {};
       titolariImport.entries.forEach(e => { map[(String(e.n).trim() + '|' + String(e.s).trim()).toLowerCase()] = true; });
       return map;
     }
-    return typeof LIKELY_STARTERS !== 'undefined' ? LIKELY_STARTERS : {};
+    return {};
   }
 
   function startersTitle() {
@@ -1168,7 +1171,7 @@
       const d = new Date(titolariImport.meta.importedAt).toLocaleDateString('it-IT');
       return `Probabile titolare secondo il PDF importato il ${d}`;
     }
-    return 'Probabile titolare secondo le probabili formazioni di base incluse nell\'app';
+    return 'Probabile titolare';
   }
 
   function normalizeNameForMatch(s) {
@@ -1690,12 +1693,12 @@
   }
 
   async function clearTitolariImport() {
-    if (!titolariImport) { showToast('Nessun import da azzerare.'); return; }
-    if (!(await showConfirm('Tornare alle probabili formazioni di base incluse nell\'app?'))) return;
+    if (!titolariImport) { showToast('Nessun import da svuotare.'); return; }
+    if (!(await showConfirm('Svuotare i titolari importati? Il pallino sparirà dal Listone finché non importi di nuovo un PDF.'))) return;
     titolariImport = null;
     saveState();
     renderAll();
-    showToast('Titolari ripristinati al default.');
+    showToast('Titolari svuotati.');
   }
 
   function renderTitolariImportStatus() {
@@ -1705,7 +1708,7 @@
       el.textContent = `Import attivo: ${titolariImport.meta.playersMatched} titolari da ${titolariImport.meta.teamsParsed} squadre analizzate (${d}).`;
       el.classList.add('loaded');
     } else {
-      el.textContent = 'Nessun import: uso le probabili formazioni di base incluse nell\'app.';
+      el.textContent = 'Nessun titolare importato: nessun pallino mostrato nel Listone finché non carichi e confermi un PDF.';
       el.classList.remove('loaded');
     }
   }

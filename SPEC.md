@@ -71,11 +71,11 @@ Percentuali di default modificabili dall'utente (devono sempre sommare 100%). Il
 4. **La mia rosa**: pannello/sezione con i giocatori selezionati raggruppati per ruolo, prezzo pagato (editabile, l'utente inserisce il prezzo reale di aggiudicazione in asta), possibilità di rimuovere.
 5. **Persistenza**: salvare rosa e impostazioni in modo che sopravvivano al refresh (localStorage se è una vera web app locale; se sviluppata come artifact Claude, niente localStorage — usare lo stato in memoria o l'API di storage fornita dalla piattaforma).
 6. **Nessun dato deve essere inventato**: tutti i calcoli derivano da `qa` e `fvm` presenti nel dataset.
-7. **Probabili titolari**: un piccolo simbolo (● verde) accanto al nome nella tabella indica i giocatori individuati come probabili titolari. La fonte è, in ordine di priorità:
-   - un **import da PDF** fatto dall'utente nel pannello "Probabili titolari" (vedi sezione dedicata sotto), se presente — sostituisce integralmente il fallback statico;
-   - altrimenti il fallback statico `starters.js` (mappa `LIKELY_STARTERS`, probabili formazioni Serie A 2026/27 fonte Goal.com aggiornate al 9 agosto 2026, compilata a mano una tantum) — copertura parziale, da aggiornare a mano se serve.
+7. **Probabili titolari**: un piccolo simbolo (● verde) accanto al nome nella tabella indica i giocatori individuati come probabili titolari. **Nessun fallback automatico**: il pallino (e la vista "sfoglia" del pannello dedicato) restano vuoti finché l'utente non importa e **conferma** un PDF nel pannello "Probabili titolari" (vedi sezione dedicata sotto) — così non si mostra mai un dato potenzialmente vecchio come se fosse affidabile. Un pulsante "Svuota titolari" azzera l'import (il pallino torna a non comparire).
 
    Il pannello "Probabili titolari" permette inoltre di **sfogliare** i titolari correnti filtrando per ruolo e per squadra.
+
+   *(Nota storica: `starters.js`, con una mappa `LIKELY_STARTERS` compilata a mano una tantum da un articolo, era usato come fallback iniziale finché non è stata introdotta questa importazione da PDF; il file resta nel repo come riferimento ma non è più caricato dall'app.)*
 
 ### Import PDF probabili titolari
 Pensato per il PDF "Infografica" che fantacalcio.it pubblica periodicamente con le probabili formazioni di ogni squadra (schema tattico con pallini colorati per ruolo — giallo portieri, verde difensori, blu centrocampisti, rosso attaccanti — vedi `DocTitolari.pdf`), ma funziona con qualunque file dello stesso formato/palette.
@@ -89,7 +89,7 @@ Pensato per il PDF "Infografica" che fantacalcio.it pubblica periodicamente con 
 
 **Limiti noti**: l'OCR può occasionalmente perdere un'etichetta in zone affollate del campo o leggere male un nome; per questo il risultato passa **sempre** da una schermata di revisione (raggruppata per squadra, con checkbox di inclusione, select per correggere/scegliere l'abbinamento, e un controllo per aggiungere a mano un titolare non rilevato) prima di essere salvato — coerente con il principio "nessun dato deve essere inventato" del punto 6. La pipeline è calibrata sul layout di questo template specifico; se fantacalcio.it lo cambia sostanzialmente il rilevamento può degradare (mitigato dalla revisione).
 
-**Persistenza**: l'import (elenco `{id, nome, squadra, ruolo}` dei giocatori abbinati + metadati) è salvato in `localStorage` insieme al resto dello stato. Un nuovo import **sostituisce integralmente** quello precedente (stesso principio del listone). Un pulsante "Ripristina default" torna al fallback statico di `starters.js`.
+**Persistenza**: l'import (elenco `{id, nome, squadra, ruolo}` dei giocatori abbinati + metadati) è salvato in `localStorage` insieme al resto dello stato. Un nuovo import **sostituisce integralmente** quello precedente (stesso principio del listone). Un pulsante "Svuota titolari" azzera l'import: nessun pallino viene più mostrato finché non se ne importa uno nuovo.
 
 ## Direzione visiva
 Tema scuro ispirato al campo da calcio / tabellone segnapunti da stadio, non il solito sfondo crema con accento terracotta.
