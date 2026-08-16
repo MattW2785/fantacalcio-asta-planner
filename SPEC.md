@@ -71,7 +71,25 @@ Percentuali di default modificabili dall'utente (devono sempre sommare 100%). Il
 4. **La mia rosa**: pannello/sezione con i giocatori selezionati raggruppati per ruolo, prezzo pagato (editabile, l'utente inserisce il prezzo reale di aggiudicazione in asta), possibilità di rimuovere.
 5. **Persistenza**: salvare rosa e impostazioni in modo che sopravvivano al refresh (localStorage se è una vera web app locale; se sviluppata come artifact Claude, niente localStorage — usare lo stato in memoria o l'API di storage fornita dalla piattaforma).
 6. **Nessun dato deve essere inventato**: tutti i calcoli derivano da `qa` e `fvm` presenti nel dataset.
-7. **Probabili titolari**: un piccolo simbolo (● verde) accanto al nome nella tabella indica i giocatori individuati come probabili titolari nelle probabili formazioni Serie A 2026/27 (fonte: Goal.com, aggiornato al 9 agosto 2026 — `starters.js`, mappa statica `LIKELY_STARTERS` abbinata per nome+squadra come appaiono nel listone "Quotazioni Fantacalcio" ufficiale, tramite fuzzy-matching verificato manualmente). Solo i giocatori dati come titolari (non le alternative) sono marcati; copertura parziale, non tutti i giocatori del listone hanno un dato disponibile. Da aggiornare a mano se cambiano le probabili formazioni.
+7. **Probabili titolari**: un piccolo simbolo (● verde) accanto al nome nella tabella indica i giocatori individuati come probabili titolari. La fonte è, in ordine di priorità:
+   - un **import da PDF** fatto dall'utente nel pannello "Probabili titolari" (vedi sezione dedicata sotto), se presente — sostituisce integralmente il fallback statico;
+   - altrimenti il fallback statico `starters.js` (mappa `LIKELY_STARTERS`, probabili formazioni Serie A 2026/27 fonte Goal.com aggiornate al 9 agosto 2026, compilata a mano una tantum) — copertura parziale, da aggiornare a mano se serve.
+
+   Il pannello "Probabili titolari" permette inoltre di **sfogliare** i titolari correnti filtrando per ruolo e per squadra.
+
+### Import PDF probabili titolari
+Pensato per il PDF "Infografica" che fantacalcio.it pubblica periodicamente con le probabili formazioni di ogni squadra (schema tattico con pallini colorati per ruolo — giallo portieri, verde difensori, blu centrocampisti, rosso attaccanti — vedi `DocTitolari.pdf`), ma funziona con qualunque file dello stesso formato/palette.
+
+**Perché OCR e non parsing diretto**: il PDF non contiene testo né vettori — ogni pagina è un'unica immagine raster incollata. Non è quindi possibile leggere i dati direttamente come si fa con l'Excel del listone (SheetJS); serve un pipeline immagine→testo, interamente client-side, vendorizzata in locale come le altre dipendenze (nessuna chiamata di rete):
+1. **pdf.js** (`vendor/pdf.min.js` + `vendor/pdf.worker.min.js`) renderizza ogni pagina su un `<canvas>`.
+2. I **riquadri squadra** vengono individuati cercando bande di righe/colonne quasi-bianche (soglia <1% pixel non bianchi) invece di coordinate fisse, così l'algoritmo si adatta se cambia il numero di righe/colonne del template.
+3. Per ogni riquadro, i **pallini ruolo** vengono rilevati con un flood-fill sui colori (soglie RGB calibrate sulla palette fantacalcio.it), escludendo l'area di stemma/titolo squadra (ha colori simili e altrimenti genera falsi positivi) e la colonna Ballottaggi/Rigori/Punizioni (non serve).
+4. **Tesseract.js** (`vendor/tesseract.min.js` + core WASM + dati lingua italiana, tutti vendorizzati in `vendor/`) fa l'OCR del riquadro; le parole riconosciute vengono raggruppate in etichette per prossimità spaziale (non per "riga" di tesseract, che unirebbe erroneamente etichette di giocatori diversi sulla stessa riga del campo ma distanti in orizzontale) e ogni etichetta viene abbinata al pallino più vicino → nome + ruolo.
+5. Il nome riconosciuto viene abbinato al **giocatore del listone** (stessa squadra+ruolo) per corrispondenza esatta o per prefisso normalizzato (case/accenti-insensitive — gestisce troncamenti dell'OCR tipo "Vitinha"→"Vitinha O.").
+
+**Limiti noti**: l'OCR può occasionalmente perdere un'etichetta in zone affollate del campo o leggere male un nome; per questo il risultato passa **sempre** da una schermata di revisione (raggruppata per squadra, con checkbox di inclusione, select per correggere/scegliere l'abbinamento, e un controllo per aggiungere a mano un titolare non rilevato) prima di essere salvato — coerente con il principio "nessun dato deve essere inventato" del punto 6. La pipeline è calibrata sul layout di questo template specifico; se fantacalcio.it lo cambia sostanzialmente il rilevamento può degradare (mitigato dalla revisione).
+
+**Persistenza**: l'import (elenco `{id, nome, squadra, ruolo}` dei giocatori abbinati + metadati) è salvato in `localStorage` insieme al resto dello stato. Un nuovo import **sostituisce integralmente** quello precedente (stesso principio del listone). Un pulsante "Ripristina default" torna al fallback statico di `starters.js`.
 
 ## Direzione visiva
 Tema scuro ispirato al campo da calcio / tabellone segnapunti da stadio, non il solito sfondo crema con accento terracotta.
@@ -83,3 +101,5 @@ Tema scuro ispirato al campo da calcio / tabellone segnapunti da stadio, non il 
 
 ## Stack suggerito
 Single-page app in HTML/CSS/JS vanilla oppure React — a scelta di Claude Code in base al contesto in cui verrà eseguita. Nessuna dipendenza da backend: tutto client-side, listone caricato dall'utente via Excel/CSV (parsing con SheetJS vendorizzato in locale).
+
+Librerie vendorizzate in `vendor/` (nessuna dipendenza da rete a runtime): SheetJS (`xlsx.full.min.js`, listone), pdf.js (`pdf.min.js` + `pdf.worker.min.js`) e Tesseract.js (`tesseract.min.js` + core WASM + dati lingua italiana in `tessdata/`) per l'import PDF dei probabili titolari (vedi punto 7). Queste ultime due portano il peso offline dell'app da ~1MB a ~9-10MB — rilevante perché l'app viene installata su Home Screen su iOS/iPadOS (vedi service worker in `sw.js`).

@@ -39,6 +39,14 @@
     { key: 'difesa', pct: { P: 16, D: 32, C: 28, A: 24 } }
   ];
 
+  // Usate solo come fallback per abbinare il nome squadra letto dal PDF titolari quando il
+  // listone non è ancora stato caricato (altrimenti si usano le squadre presenti nel listone).
+  const KNOWN_TEAM_NAMES_FALLBACK = [
+    'Atalanta', 'Bologna', 'Cagliari', 'Como', 'Fiorentina', 'Frosinone', 'Genoa', 'Inter',
+    'Juventus', 'Lazio', 'Lecce', 'Milan', 'Monza', 'Napoli', 'Parma', 'Roma', 'Sassuolo',
+    'Torino', 'Udinese', 'Venezia'
+  ];
+
   // ---------- State ----------
   const initial = loadState();
   let settings = initial.settings;
@@ -46,6 +54,9 @@
   let PLAYERS_DATA = initial.players; // caricato da file Excel/CSV, nessun listone incorporato
   let playersMeta = initial.playersMeta; // { fileName, importedAt } | null
   let sync = initial.sync; // collegamento con Asta Live (vedi DEFAULT_SYNC)
+  // Probabili titolari importati da PDF (vedi sezione dedicata più sotto): quando presente,
+  // sostituisce integralmente il fallback statico LIKELY_STARTERS di starters.js.
+  let titolariImport = initial.titolariImport; // { entries:[{id,n,s,r}], meta:{...} } | null
   let activeRole = 'P';
   let searchTerm = '';
   let sortKey = 'qa';
@@ -76,7 +87,7 @@
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC } };
+      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
       const parsed = JSON.parse(raw);
       return {
         settings: { ...DEFAULT_SETTINGS, ...parsed.settings, pct: { ...DEFAULT_SETTINGS.pct, ...(parsed.settings && parsed.settings.pct) } },
@@ -87,15 +98,16 @@
           ...DEFAULT_SYNC,
           ...(parsed.sync || {}),
           ignoreKeys: Array.isArray(parsed.sync && parsed.sync.ignoreKeys) ? parsed.sync.ignoreKeys : []
-        }
+        },
+        titolariImport: (parsed.titolariImport && Array.isArray(parsed.titolariImport.entries)) ? parsed.titolariImport : null
       };
     } catch (e) {
-      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC } };
+      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
     }
   }
 
   function saveState() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta, sync }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta, sync, titolariImport }));
   }
 
   // ---------- Derived calculations ----------
@@ -495,9 +507,9 @@
       else if (slotFull) addLabel = 'Slot pieno';
 
       const starterKey = (p.n.trim() + '|' + p.s.trim()).toLowerCase();
-      const isStarter = typeof LIKELY_STARTERS !== 'undefined' && LIKELY_STARTERS[starterKey];
+      const isStarter = activeStartersMap()[starterKey];
       const starterMark = isStarter
-        ? '<span class="starter-dot" title="Probabile titolare secondo le probabili formazioni Serie A 2026/27 (fonte: Goal.com, agg. 9 ago 2026)">●</span> '
+        ? `<span class="starter-dot" title="${escapeHtml(startersTitle())}">●</span> `
         : '';
 
       tr.innerHTML = `
@@ -607,6 +619,9 @@
     renderTable();
     renderRoster();
     renderSyncPanel();
+    renderTitolariImportStatus();
+    renderTitolariReview();
+    renderTitolariBrowse();
   }
 
   function renderImportStatus() {
@@ -1125,6 +1140,628 @@
     });
   }
 
+  // ---------- Probabili titolari: import da PDF ----------
+  // Il PDF "Infografica" di fantacalcio.it non contiene testo né vettori: ogni pagina è
+  // un'unica immagine raster. La pipeline quindi: 1) renderizza ogni pagina su canvas con
+  // pdf.js, 2) individua i riquadri squadra cercando righe/colonne quasi-bianche (si adatta
+  // al numero di righe/colonne, non è cablato), 3) per ogni riquadro rileva i pallini colorati
+  // per ruolo (giallo=P, verde=D, blu=C, rosso=A) via flood-fill sui colori, 4) fa l'OCR
+  // (Tesseract.js) del riquadro (esclusa la colonna Ballottaggi/Rigori/Punizioni, non serve e
+  // se inclusa confonde l'OCR), 5) raggruppa le parole riconosciute in etichette per prossimità
+  // e abbina ciascuna etichetta al pallino più vicino = nome+ruolo, 6) abbina il nome al
+  // giocatore del listone (match per prefisso, gestisce troncamenti tipo "Vitinha"→"Vitinha O.").
+  // Il risultato passa SEMPRE da una revisione manuale prima di essere salvato (vedi SPEC §6:
+  // "nessun dato deve essere inventato") perché l'OCR può perdere etichette in zone affollate
+  // del campo o leggere male un nome.
+
+  function activeStartersMap() {
+    if (titolariImport && Array.isArray(titolariImport.entries) && titolariImport.entries.length) {
+      const map = {};
+      titolariImport.entries.forEach(e => { map[(String(e.n).trim() + '|' + String(e.s).trim()).toLowerCase()] = true; });
+      return map;
+    }
+    return typeof LIKELY_STARTERS !== 'undefined' ? LIKELY_STARTERS : {};
+  }
+
+  function startersTitle() {
+    if (titolariImport && titolariImport.meta) {
+      const d = new Date(titolariImport.meta.importedAt).toLocaleDateString('it-IT');
+      return `Probabile titolare secondo il PDF importato il ${d}`;
+    }
+    return 'Probabile titolare secondo le probabili formazioni di base incluse nell\'app';
+  }
+
+  function normalizeNameForMatch(s) {
+    return String(s || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '') // rimuove accenti/diacritici
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  function bestNameMatch(ocrText, candidates) {
+    const norm = normalizeNameForMatch(ocrText);
+    if (!norm) return null;
+    const exact = candidates.find(p => normalizeNameForMatch(p.n) === norm);
+    if (exact) return exact;
+    const prefix = candidates.filter(p => {
+      const pn = normalizeNameForMatch(p.n);
+      return pn.startsWith(norm) || norm.startsWith(pn);
+    });
+    return prefix.length === 1 ? prefix[0] : null; // ambiguo (0 o >1): lascia scegliere in revisione
+  }
+
+  function matchTeamName(ocrTeam) {
+    if (!ocrTeam) return null;
+    const norm = normalizeNameForMatch(ocrTeam);
+    const known = PLAYERS_DATA.length ? [...new Set(PLAYERS_DATA.map(p => p.s))] : KNOWN_TEAM_NAMES_FALLBACK;
+    const exact = known.find(t => normalizeNameForMatch(t) === norm);
+    if (exact) return exact;
+    // "includes" (non solo prefisso): il nome squadra nell'header a volte prende rumore OCR
+    // dallo stemma vicino (es. "BG Lecce" invece di "Lecce").
+    const partial = known.filter(t => {
+      const tn = normalizeNameForMatch(t);
+      return norm.includes(tn) || tn.includes(norm);
+    });
+    return partial.length === 1 ? partial[0] : null;
+  }
+
+  // ---- Rendering pagina PDF e individuazione riquadri squadra ----
+
+  let titolariPdfConfigured = false;
+  function ensureTitolariLibsConfigured() {
+    if (titolariPdfConfigured) return;
+    if (typeof pdfjsLib !== 'undefined') {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+    }
+    titolariPdfConfigured = true;
+  }
+
+  // Trova i blocchi di contenuto lungo un asse (righe o colonne) cercando bande "quasi
+  // bianche" (soglia <1% pixel non bianchi) come separatori. Unisce separatori vicini (sotto
+  // gli 80px) perché i bordi arrotondati/ombra dei riquadri creano più bande bianche sottili
+  // invece di una sola. Scarta blocchi molto più piccoli della mediana (tipicamente la barra
+  // del titolo in alto, non un riquadro squadra) invece di assumere un'altezza fissa: così si
+  // adatta se il template cambia numero di righe/colonne.
+  function findContentBlocks(isWhiteFn, length) {
+    const gaps = [];
+    let inGap = false, gapStart = 0;
+    for (let i = 0; i < length; i++) {
+      const w = isWhiteFn(i);
+      if (w && !inGap) { inGap = true; gapStart = i; }
+      if (!w && inGap) { inGap = false; if (i - gapStart > 3) gaps.push([gapStart, i]); }
+    }
+    if (inGap && length - gapStart > 3) gaps.push([gapStart, length]);
+
+    const merged = [];
+    gaps.forEach(g => {
+      if (merged.length && g[0] - merged[merged.length - 1][1] < 80) {
+        merged[merged.length - 1][1] = g[1];
+      } else {
+        merged.push(g.slice());
+      }
+    });
+
+    const blocks = [];
+    let cursor = 0;
+    merged.forEach(([gs, ge]) => {
+      if (gs - cursor > 20) blocks.push([cursor, gs]);
+      cursor = ge;
+    });
+    if (length - cursor > 20) blocks.push([cursor, length]);
+
+    if (blocks.length <= 1) return blocks;
+    const sizes = blocks.map(b => b[1] - b[0]).slice().sort((a, b) => a - b);
+    const median = sizes[Math.floor(sizes.length / 2)];
+    return blocks.filter(b => (b[1] - b[0]) >= median * 0.5);
+  }
+
+  function detectPanelRects(imgData, width, height) {
+    const data = imgData.data;
+    const isWhitePixelAt = idx => data[idx] > 245 && data[idx + 1] > 245 && data[idx + 2] > 245;
+
+    const isWhiteRow = y => {
+      let nonWhite = 0, total = 0;
+      for (let x = 0; x < width; x += 4) {
+        total++;
+        if (!isWhitePixelAt((y * width + x) * 4)) nonWhite++;
+      }
+      return nonWhite < total * 0.01;
+    };
+    const rowBlocks = findContentBlocks(isWhiteRow, height);
+
+    const panels = [];
+    rowBlocks.forEach(([y0, y1]) => {
+      const isWhiteColInRow = x => {
+        let nonWhite = 0, total = 0;
+        for (let y = y0; y < y1; y += 4) {
+          total++;
+          if (!isWhitePixelAt((y * width + x) * 4)) nonWhite++;
+        }
+        return nonWhite < total * 0.01;
+      };
+      const colBlocks = findContentBlocks(isWhiteColInRow, width);
+      colBlocks.forEach(([x0, x1]) => {
+        panels.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+      });
+    });
+    return panels;
+  }
+
+  function cropCanvas(sourceCanvas, x, y, w, h) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w));
+    c.height = Math.max(1, Math.round(h));
+    c.getContext('2d').drawImage(sourceCanvas, x, y, w, h, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  // ---- Rilevamento pallini ruolo (flood-fill sui colori) ----
+
+  // Soglie calibrate sulla palette dell'infografica fantacalcio.it (giallo/ambra portieri,
+  // verde difensori, blu centrocampisti, rosso attaccanti).
+  function classifyRoleColor(r, g, b) {
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    if (max - min < 20) return null; // grigio/bianco/nero: non è un pallino
+    if (r > 200 && g > 130 && g < 200 && b < 100) return 'P';
+    if (g > 120 && r < 120 && b < 120) return 'D';
+    if (b > 150 && r < 120 && g < 170) return 'C';
+    if (r > 170 && g < 90 && b < 90) return 'A';
+    return null;
+  }
+
+  // excludeTopFrac esclude l'area di stemma/titolo squadra in alto nel riquadro: ha colori
+  // simili ai pallini e senza esclusione produce falsi positivi.
+  function detectRoleDots(canvas, excludeTopFrac) {
+    const width = canvas.width, height = canvas.height;
+    const { data } = canvas.getContext('2d').getImageData(0, 0, width, height);
+    const yStart = Math.round(height * excludeTopFrac);
+    const visited = new Uint8Array(width * height);
+    const blobs = [];
+
+    for (let y = yStart; y < height; y += 2) {
+      for (let x = 0; x < width; x += 2) {
+        const idx = y * width + x;
+        if (visited[idx]) continue;
+        const p = idx * 4;
+        const role = classifyRoleColor(data[p], data[p + 1], data[p + 2]);
+        if (!role) continue;
+        const stack = [[x, y]];
+        let sx = 0, sy = 0, count = 0;
+        while (stack.length) {
+          const [cx, cy] = stack.pop();
+          if (cx < 0 || cy < 0 || cx >= width || cy >= height) continue;
+          const ci = cy * width + cx;
+          if (visited[ci]) continue;
+          const cp = ci * 4;
+          if (classifyRoleColor(data[cp], data[cp + 1], data[cp + 2]) !== role) continue;
+          visited[ci] = 1;
+          sx += cx; sy += cy; count++;
+          stack.push([cx + 2, cy], [cx - 2, cy], [cx, cy + 2], [cx, cy - 2]);
+        }
+        if (count > 250) blobs.push({ role, cx: sx / count, cy: sy / count }); // scarta rumore/testo colorato
+      }
+    }
+    return blobs;
+  }
+
+  // ---- OCR (Tesseract.js) e clustering parole → etichette nome ----
+
+  let ocrWorkerPromise = null;
+  function getOcrWorker() {
+    if (!ocrWorkerPromise) {
+      ocrWorkerPromise = Tesseract.createWorker('ita', 1, {
+        workerPath: 'vendor/tesseract-worker.min.js',
+        corePath: 'vendor/tesseract-core-lstm.wasm.js',
+        langPath: 'vendor/tessdata/',
+        gzip: false,
+        cacheMethod: 'none'
+      });
+    }
+    return ocrWorkerPromise;
+  }
+
+  async function terminateOcrWorker() {
+    if (!ocrWorkerPromise) return;
+    const w = await ocrWorkerPromise;
+    ocrWorkerPromise = null;
+    try { await w.terminate(); } catch (e) { /* worker già chiuso */ }
+  }
+
+  async function ocrPanelWords(worker, canvas) {
+    const { data } = await worker.recognize(canvas, {}, { tsv: true, text: false });
+    const words = [];
+    (data.tsv || '').split('\n').forEach(line => {
+      const cols = line.split('\t');
+      if (cols[0] !== '5') return; // livello 5 = parola
+      const text = (cols[11] || '').trim();
+      if (!text || !/[A-Za-zÀ-ÖØ-öø-ÿ]{2,}/.test(text)) return; // scarta simboli spuri dei pallini
+      words.push({ text, x: +cols[6], y: +cols[7], w: +cols[8], h: +cols[9] });
+    });
+    return words;
+  }
+
+  // Raggruppa le singole parole OCR in etichette per prossimità spaziale (non per "riga"
+  // individuata da tesseract: unirebbe erroneamente etichette di giocatori diversi che si
+  // trovano sulla stessa riga del campo ma distanti in orizzontale).
+  function clusterWordsIntoLabels(words) {
+    const sorted = words.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+    const used = new Array(sorted.length).fill(false);
+    const clusters = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      if (used[i]) continue;
+      const cluster = [sorted[i]];
+      used[i] = true;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (let j = 0; j < sorted.length; j++) {
+          if (used[j]) continue;
+          for (const c of cluster) {
+            const dx = Math.min(Math.abs(sorted[j].x - (c.x + c.w)), Math.abs((sorted[j].x + sorted[j].w) - c.x));
+            const dy = Math.abs(sorted[j].y - c.y);
+            if (dx < 60 && dy < 25) {
+              cluster.push(sorted[j]);
+              used[j] = true;
+              changed = true;
+              break;
+            }
+          }
+        }
+      }
+      clusters.push(cluster);
+    }
+
+    return clusters.map(c => {
+      c.sort((a, b) => a.x - b.x);
+      const minX = Math.min(...c.map(w => w.x));
+      const maxX = Math.max(...c.map(w => w.x + w.w));
+      const minY = Math.min(...c.map(w => w.y));
+      const maxY = Math.max(...c.map(w => w.y + w.h));
+      return {
+        text: c.map(w => w.text).join(' '),
+        cx: (minX + maxX) / 2,
+        cy: (minY + maxY) / 2,
+        height: Math.max(...c.map(w => w.h))
+      };
+    });
+  }
+
+  // Frazione di larghezza riquadro da tenere (esclude la colonna Ballottaggi/Rigori/Punizioni,
+  // che non serve e se inclusa nell'OCR genera testo corrotto per la vicinanza con lo schema
+  // campo). Frazione di altezza esclusa in alto (stemma+nome squadra, vedi detectRoleDots).
+  const PANEL_PITCH_WIDTH_FRAC = 0.651;
+  const PANEL_HEADER_HEIGHT_FRAC = 0.172;
+
+  async function parseTeamPanel(pageCanvas, rect, worker) {
+    const cropW = rect.w * PANEL_PITCH_WIDTH_FRAC;
+    const panelCanvas = cropCanvas(pageCanvas, rect.x, rect.y, cropW, rect.h);
+
+    const dots = detectRoleDots(panelCanvas, PANEL_HEADER_HEIGHT_FRAC);
+    const words = await ocrPanelWords(worker, panelCanvas);
+    const labels = clusterWordsIntoLabels(words);
+
+    const headerLabels = labels.filter(l => l.cy < rect.h * PANEL_HEADER_HEIGHT_FRAC);
+    const teamNameLabel = headerLabels.slice().sort((a, b) => b.height - a.height)[0];
+    const team = teamNameLabel ? teamNameLabel.text.trim() : null;
+
+    const nameLabels = labels.filter(l =>
+      l.cy >= rect.h * PANEL_HEADER_HEIGHT_FRAC &&
+      !/^\d(-\d)+$/.test(l.text) &&
+      !/^all:?/i.test(l.text)
+    );
+
+    const matched = nameLabels.map(l => {
+      let best = null, bestDist = Infinity;
+      dots.forEach(d => {
+        const dist = Math.hypot(d.cx - l.cx, d.cy - l.cy);
+        if (dist < bestDist) { bestDist = dist; best = d; }
+      });
+      return best && bestDist < 200 ? { ocrText: l.text, role: best.role } : null;
+    }).filter(Boolean);
+
+    return { team, dotsFound: dots.length, matched };
+  }
+
+  // ---- Orchestrazione import + progress ----
+
+  function showTitolariProgress(show) {
+    document.getElementById('titolari-progress').hidden = !show;
+    if (!show) updateTitolariProgress('', 0);
+  }
+
+  function updateTitolariProgress(text, pct) {
+    document.getElementById('titolari-progress-text').textContent = text;
+    document.getElementById('titolari-progress-fill').style.width = `${Math.max(0, Math.min(100, Math.round(pct)))}%`;
+  }
+
+  async function handleTitolariPdfImport(file) {
+    if (typeof pdfjsLib === 'undefined' || typeof Tesseract === 'undefined') {
+      showToast('Librerie PDF/OCR non disponibili: ricarica la pagina e riprova.', 'error');
+      return;
+    }
+    if (PLAYERS_DATA.length === 0) {
+      const proceed = await showConfirm('Il listone non è ancora caricato: senza abbinamento ai giocatori i titolari rilevati non potranno essere confermati. Caricare comunque il PDF adesso?');
+      if (!proceed) return;
+    }
+
+    ensureTitolariLibsConfigured();
+    pendingReview = null;
+    renderTitolariReview();
+    showTitolariProgress(true);
+    updateTitolariProgress('Lettura del PDF…', 2);
+
+    try {
+      const buffer = await readFileAsArrayBuffer(file);
+      const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+
+      const panelJobs = [];
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        updateTitolariProgress(`Rendering pagina ${pageNum}/${pdf.numPages}…`, 5 + (pageNum - 1) * 10);
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 1 });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(viewport.width);
+        canvas.height = Math.round(viewport.height);
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        const imgData = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+        detectPanelRects(imgData, canvas.width, canvas.height).forEach(rect => panelJobs.push({ canvas, rect }));
+      }
+
+      if (panelJobs.length === 0) {
+        throw new Error('Non ho trovato nessun riquadro squadra nel PDF: il formato potrebbe essere diverso da quello atteso.');
+      }
+
+      const worker = await getOcrWorker();
+      const panelResults = [];
+      for (let i = 0; i < panelJobs.length; i++) {
+        updateTitolariProgress(`Analisi squadra ${i + 1}/${panelJobs.length}…`, 25 + (i / panelJobs.length) * 70);
+        panelResults.push(await parseTeamPanel(panelJobs[i].canvas, panelJobs[i].rect, worker));
+      }
+
+      updateTitolariProgress('Preparazione revisione…', 98);
+      buildPendingReview(panelResults);
+      pendingReview.fileName = file.name;
+      showTitolariProgress(false);
+      renderTitolariReview();
+      document.getElementById('titolari-review').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      showTitolariProgress(false);
+      showToast(`Analisi PDF fallita: ${err.message || err}`, 'error');
+    } finally {
+      await terminateOcrWorker();
+    }
+  }
+
+  // ---- Revisione (obbligatoria prima di salvare, vedi SPEC §6) ----
+
+  let pendingReview = null; // { teams:[{team, rows:[{role,ocrText,candidates,matchedId,included}]}], stats:{...}, fileName }
+
+  function buildPendingReview(panelResults) {
+    const teams = [];
+    let playersMatched = 0, playersUnmatched = 0, teamsFailed = 0;
+
+    panelResults.forEach(res => {
+      const teamLabel = matchTeamName(res.team) || res.team || 'Squadra non riconosciuta';
+      if (!res.team || res.dotsFound === 0) teamsFailed++;
+
+      const rows = res.matched.map(m => {
+        const candidates = PLAYERS_DATA.filter(p => p.r === m.role && normalizeNameForMatch(p.s) === normalizeNameForMatch(teamLabel));
+        const auto = bestNameMatch(m.ocrText, candidates);
+        if (auto) playersMatched++; else playersUnmatched++;
+        return { role: m.role, ocrText: m.ocrText, candidates, matchedId: auto ? auto.id : null, included: true };
+      });
+
+      teams.push({ team: teamLabel, rows });
+    });
+
+    pendingReview = { teams, stats: { playersMatched, playersUnmatched, teamsParsed: panelResults.length, teamsFailed } };
+  }
+
+  function renderPlayerMatchSelect(row, ti, ri) {
+    if (row.candidates.length === 0) {
+      return `<span class="hint">Nessun ${ROLE_LABELS[row.role].toLowerCase()} trovato per questa squadra nel listone</span>`;
+    }
+    const opts = ['<option value="">— seleziona —</option>']
+      .concat(row.candidates.map(p => `<option value="${p.id}" ${p.id === row.matchedId ? 'selected' : ''}>${escapeHtml(p.n)}</option>`));
+    return `<select class="mono-input titolari-match-select" data-team="${ti}" data-row="${ri}">${opts.join('')}</select>`;
+  }
+
+  function renderTitolariReview() {
+    const wrap = document.getElementById('titolari-review');
+    const browseWrap = document.getElementById('titolari-browse');
+    if (!pendingReview) {
+      wrap.hidden = true;
+      browseWrap.hidden = false;
+      return;
+    }
+    wrap.hidden = false;
+    browseWrap.hidden = true;
+
+    const s = pendingReview.stats;
+    document.getElementById('titolari-review-summary').textContent =
+      `${s.teamsParsed} squadre analizzate — ${s.playersMatched} titolari abbinati automaticamente, ${s.playersUnmatched} da verificare manualmente` +
+      (s.teamsFailed ? `, ${s.teamsFailed} squadre non riconosciute` : '') + '.';
+
+    const roleOptions = ROLES.map(r => `<option value="${r}">${r}</option>`).join('');
+    let html = '';
+    pendingReview.teams.forEach((t, ti) => {
+      html += `<tr class="titolari-team-row"><td colspan="4">${escapeHtml(t.team)} <span class="hint">(${t.rows.length} rilevati)</span></td></tr>`;
+      t.rows.forEach((r, ri) => {
+        html += `
+          <tr class="titolari-review-row${r.matchedId ? '' : ' unmatched'}">
+            <td><input type="checkbox" class="titolari-include" data-team="${ti}" data-row="${ri}" ${r.included ? 'checked' : ''}></td>
+            <td><span class="role-tag role-${r.role}">${r.role}</span></td>
+            <td class="titolari-ocr-text">${escapeHtml(r.ocrText)}</td>
+            <td>${renderPlayerMatchSelect(r, ti, ri)}</td>
+          </tr>`;
+      });
+      html += `
+        <tr class="titolari-add-row" data-team="${ti}">
+          <td></td>
+          <td colspan="3">
+            + Aggiungi titolare mancante:
+            <select class="mono-input titolari-add-role" data-team="${ti}">${roleOptions}</select>
+            <select class="mono-input titolari-add-player" data-team="${ti}"></select>
+            <button type="button" class="btn btn-add titolari-add-btn" data-team="${ti}">Aggiungi</button>
+          </td>
+        </tr>`;
+    });
+    document.getElementById('titolari-review-tbody').innerHTML = html;
+
+    pendingReview.teams.forEach((t, ti) => populateAddPlayerSelect(ti));
+  }
+
+  function populateAddPlayerSelect(ti) {
+    const team = pendingReview.teams[ti];
+    const roleSel = document.querySelector(`.titolari-add-role[data-team="${ti}"]`);
+    const playerSel = document.querySelector(`.titolari-add-player[data-team="${ti}"]`);
+    if (!roleSel || !playerSel) return;
+    const role = roleSel.value;
+    const usedIds = new Set(team.rows.map(r => r.matchedId).filter(Boolean));
+    const options = PLAYERS_DATA.filter(p => p.r === role && normalizeNameForMatch(p.s) === normalizeNameForMatch(team.team) && !usedIds.has(p.id));
+    playerSel.innerHTML = options.length
+      ? options.map(p => `<option value="${p.id}">${escapeHtml(p.n)}</option>`).join('')
+      : '<option value="">Nessuno disponibile</option>';
+  }
+
+  function wireTitolariReviewTable() {
+    const tbody = document.getElementById('titolari-review-tbody');
+    tbody.addEventListener('change', e => {
+      if (e.target.classList.contains('titolari-include')) {
+        const ti = +e.target.dataset.team, ri = +e.target.dataset.row;
+        pendingReview.teams[ti].rows[ri].included = e.target.checked;
+      } else if (e.target.classList.contains('titolari-match-select')) {
+        const ti = +e.target.dataset.team, ri = +e.target.dataset.row;
+        pendingReview.teams[ti].rows[ri].matchedId = e.target.value ? +e.target.value : null;
+        renderTitolariReview();
+      } else if (e.target.classList.contains('titolari-add-role')) {
+        populateAddPlayerSelect(+e.target.dataset.team);
+      }
+    });
+    tbody.addEventListener('click', e => {
+      const btn = e.target.closest('.titolari-add-btn');
+      if (!btn) return;
+      const ti = +btn.dataset.team;
+      const playerSel = document.querySelector(`.titolari-add-player[data-team="${ti}"]`);
+      if (!playerSel || !playerSel.value) return;
+      const player = playersById.get(+playerSel.value);
+      if (!player) return;
+      const team = pendingReview.teams[ti];
+      team.rows.push({
+        role: player.r,
+        ocrText: '(aggiunto a mano)',
+        candidates: PLAYERS_DATA.filter(p => p.r === player.r && normalizeNameForMatch(p.s) === normalizeNameForMatch(team.team)),
+        matchedId: player.id,
+        included: true
+      });
+      renderTitolariReview();
+    });
+  }
+
+  function confirmTitolariReview() {
+    if (!pendingReview) return;
+    const entries = [];
+    pendingReview.teams.forEach(t => {
+      t.rows.forEach(r => {
+        if (!r.included || !r.matchedId) return;
+        const p = playersById.get(r.matchedId);
+        if (p) entries.push({ id: p.id, n: p.n, s: p.s, r: p.r });
+      });
+    });
+    if (entries.length === 0) {
+      showToast('Nessun titolare abbinato: import annullato.', 'error');
+      return;
+    }
+    titolariImport = {
+      entries,
+      meta: { importedAt: new Date().toISOString(), fileName: pendingReview.fileName || null, teamsParsed: pendingReview.stats.teamsParsed, playersMatched: entries.length }
+    };
+    pendingReview = null;
+    saveState();
+    renderAll();
+    showToast(`Titolari aggiornati: ${entries.length} giocatori abbinati.`);
+  }
+
+  function cancelTitolariReview() {
+    pendingReview = null;
+    renderTitolariReview();
+  }
+
+  async function clearTitolariImport() {
+    if (!titolariImport) { showToast('Nessun import da azzerare.'); return; }
+    if (!(await showConfirm('Tornare alle probabili formazioni di base incluse nell\'app?'))) return;
+    titolariImport = null;
+    saveState();
+    renderAll();
+    showToast('Titolari ripristinati al default.');
+  }
+
+  function renderTitolariImportStatus() {
+    const el = document.getElementById('titolari-import-status');
+    if (titolariImport && titolariImport.meta) {
+      const d = new Date(titolariImport.meta.importedAt).toLocaleString('it-IT');
+      el.textContent = `Import attivo: ${titolariImport.meta.playersMatched} titolari da ${titolariImport.meta.teamsParsed} squadre analizzate (${d}).`;
+      el.classList.add('loaded');
+    } else {
+      el.textContent = 'Nessun import: uso le probabili formazioni di base incluse nell\'app.';
+      el.classList.remove('loaded');
+    }
+  }
+
+  // ---- Vista "sfoglia titolari" per ruolo/squadra ----
+
+  let titolariActiveRole = 'P';
+  let titolariTeamFilter = '';
+
+  function renderTitolariBrowse() {
+    const map = activeStartersMap();
+    const rows = PLAYERS_DATA.filter(p => map[(p.n.trim() + '|' + p.s.trim()).toLowerCase()]);
+
+    const teamSelect = document.getElementById('titolari-team-filter');
+    if (document.activeElement !== teamSelect) {
+      const teams = [...new Set(rows.map(p => p.s))].sort((a, b) => a.localeCompare(b, 'it'));
+      const current = teamSelect.value;
+      teamSelect.innerHTML = '<option value="">Tutte le squadre</option>' + teams.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+      if (teams.includes(current)) teamSelect.value = current;
+    }
+
+    document.querySelectorAll('#titolari-role-tabs .role-tab').forEach(t => t.classList.toggle('active', t.dataset.role === titolariActiveRole));
+
+    const filtered = rows
+      .filter(p => p.r === titolariActiveRole)
+      .filter(p => !titolariTeamFilter || p.s === titolariTeamFilter)
+      .sort((a, b) => a.s.localeCompare(b.s, 'it') || a.n.localeCompare(b.n, 'it'));
+
+    document.getElementById('titolari-browse-tbody').innerHTML = filtered.map(p => `<tr><td>${escapeHtml(p.n)}</td><td>${escapeHtml(p.s)}</td></tr>`).join('');
+    document.getElementById('titolari-empty-state').hidden = filtered.length > 0;
+    document.getElementById('titolari-browse-table').hidden = filtered.length === 0;
+  }
+
+  function wireTitolariPanel() {
+    document.getElementById('titolari-file-input').addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (file) handleTitolariPdfImport(file);
+    });
+    document.getElementById('btn-clear-titolari').addEventListener('click', clearTitolariImport);
+    document.getElementById('btn-titolari-confirm').addEventListener('click', confirmTitolariReview);
+    document.getElementById('btn-titolari-cancel').addEventListener('click', cancelTitolariReview);
+    wireTitolariReviewTable();
+
+    document.getElementById('titolari-role-tabs').addEventListener('click', e => {
+      const btn = e.target.closest('.role-tab');
+      if (!btn) return;
+      titolariActiveRole = btn.dataset.role;
+      renderTitolariBrowse();
+    });
+    document.getElementById('titolari-team-filter').addEventListener('change', e => {
+      titolariTeamFilter = e.target.value;
+      renderTitolariBrowse();
+    });
+  }
+
   // ---------- Sticky header offset (for anchor-scroll targets) ----------
   function updateHeaderOffset() {
     const header = document.getElementById('scoreboard');
@@ -1137,6 +1774,7 @@
     wireEvents();
     wireImport();
     wireSync();
+    wireTitolariPanel();
     renderAll();
     updateHeaderOffset();
     window.addEventListener('resize', updateHeaderOffset);

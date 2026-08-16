@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20260815-4">
+<link rel="stylesheet" href="style.css?v=20260816-1">
 <script>
 // Registrato il prima possibile (prima di qualunque altro script): un service worker attivo
 // e' cio' che fa uscire l'app aggiunta alla Home su iOS/iPadOS dalla cache "statica" del
@@ -81,6 +81,7 @@ if ("serviceWorker" in navigator) {
       <a href="#sync-panel" class="quick-nav-link">Asta Live</a>
       <a href="#settings-panel" class="quick-nav-link">Impostazioni</a>
       <a href="#players-panel" class="quick-nav-link">Listone</a>
+      <a href="#titolari-panel" class="quick-nav-link">Titolari</a>
       <a href="#roster-panel" class="quick-nav-link quick-nav-highlight">La mia rosa</a>
     </nav>
   </div>
@@ -216,7 +217,7 @@ if ("serviceWorker" in navigator) {
       </div>
 
       <div class="role-spend-strip" id="role-spend-strip"></div>
-      <p class="hint import-hint"><span class="starter-dot">●</span> accanto al nome = probabile titolare secondo le probabili formazioni Serie A 2026/27 (fonte: Goal.com, agg. 9 ago 2026) — disponibile solo per i giocatori individuati nell'articolo, verificare a ridosso della giornata.</p>
+      <p class="hint import-hint"><span class="starter-dot">●</span> accanto al nome = probabile titolare, vedi pannello <a href="#titolari-panel">"Probabili titolari"</a> per la fonte e per caricare un aggiornamento — copertura parziale, verificare a ridosso della giornata.</p>
 
       <div class="table-wrap">
         <table class="players-table" id="players-table">
@@ -232,6 +233,70 @@ if ("serviceWorker" in navigator) {
             </tr>
           </thead>
           <tbody id="players-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel titolari-panel" id="titolari-panel">
+    <h2 class="panel-title">Probabili titolari</h2>
+    <p class="hint fm-explainer">Carica l'infografica PDF "Probabili formazioni" di fantacalcio.it (o un file dello stesso formato): l'app riconosce squadra, ruolo e nome di ogni titolare dal colore del pallino nello schema tattico (portieri giallo, difensori verde, centrocampisti blu, attaccanti rosso) e dal testo vicino, poi mostra una schermata di revisione da confermare — nessun dato viene salvato senza il tuo controllo. Serve il listone già caricato per abbinare i nomi riconosciuti ai giocatori.</p>
+
+    <div class="players-import" id="titolari-import">
+      <div class="import-row">
+        <div class="import-status" id="titolari-import-status">Nessun import: uso le probabili formazioni di base incluse nell'app.</div>
+        <label class="btn btn-add import-btn" for="titolari-file-input">Carica probabili formazioni (PDF)</label>
+        <input type="file" id="titolari-file-input" accept="application/pdf,.pdf" hidden>
+        <button type="button" class="btn btn-remove" id="btn-clear-titolari">Ripristina default</button>
+      </div>
+    </div>
+
+    <div class="titolari-progress" id="titolari-progress" hidden>
+      <div class="titolari-progress-text" id="titolari-progress-text">Analisi in corso&hellip;</div>
+      <div class="rss-bar-wrap"><div class="rss-bar-fill" id="titolari-progress-fill" style="width:0%"></div></div>
+    </div>
+
+    <div class="titolari-review" id="titolari-review" hidden>
+      <p class="titolari-review-summary" id="titolari-review-summary"></p>
+      <div class="table-wrap">
+        <table class="players-table titolari-review-table" id="titolari-review-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Ruolo</th>
+              <th>Rilevato</th>
+              <th>Giocatore abbinato</th>
+            </tr>
+          </thead>
+          <tbody id="titolari-review-tbody"></tbody>
+        </table>
+      </div>
+      <div class="titolari-review-actions">
+        <button type="button" class="btn btn-add" id="btn-titolari-confirm">Conferma import</button>
+        <button type="button" class="btn btn-remove" id="btn-titolari-cancel">Annulla</button>
+      </div>
+    </div>
+
+    <div id="titolari-browse">
+      <div class="players-controls">
+        <div class="role-tabs" id="titolari-role-tabs">
+          <button class="role-tab active" data-role="P">Portieri</button>
+          <button class="role-tab" data-role="D">Difensori</button>
+          <button class="role-tab" data-role="C">Centrocampisti</button>
+          <button class="role-tab" data-role="A">Attaccanti</button>
+        </div>
+        <select id="titolari-team-filter" class="mono-input"><option value="">Tutte le squadre</option></select>
+      </div>
+      <div id="titolari-empty-state" class="titolari-empty-state" hidden>Nessun probabile titolare disponibile per questo filtro — carica prima il listone giocatori.</div>
+      <div class="table-wrap">
+        <table class="players-table" id="titolari-browse-table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Squadra</th>
+            </tr>
+          </thead>
+          <tbody id="titolari-browse-tbody"></tbody>
         </table>
       </div>
     </div>
@@ -261,7 +326,9 @@ if ("serviceWorker" in navigator) {
 </div>
 
 <script src="vendor/xlsx.full.min.js"></script>
-<script src="starters.js?v=20260815-2"></script>
-<script src="app.js?v=20260815-2"></script>
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/tesseract.min.js"></script>
+<script src="starters.js?v=20260816-1"></script>
+<script src="app.js?v=20260816-1"></script>
 </body>
 </html>

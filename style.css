@@ -813,6 +813,73 @@ body.no-players #players-data-area { display: none; }
   vertical-align: middle;
 }
 
+/* ---------- Probabili titolari (import PDF + revisione + sfoglia) ---------- */
+.titolari-progress {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.titolari-progress-text {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.titolari-review {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.titolari-review-summary {
+  margin: 0 0 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.titolari-review-table td { vertical-align: middle; }
+
+.titolari-team-row td {
+  padding-top: 1rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.03em;
+  color: var(--gold);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.95rem;
+}
+
+.titolari-review-row.unmatched { background: rgba(217, 97, 74, 0.08); }
+
+.titolari-ocr-text {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.titolari-add-row select { max-width: 220px; }
+
+.titolari-review-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.titolari-empty-state {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
 .btn {
   font-family: var(--font-body);
   font-weight: 600;
