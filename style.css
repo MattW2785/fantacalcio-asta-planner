@@ -1071,6 +1071,28 @@ body.no-players #players-data-area { display: none; }
   color: var(--text-secondary);
 }
 
+.roster-starter-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  margin-left: 0.3rem;
+  cursor: help;
+  border: 1px solid transparent;
+}
+
+.roster-starter-badge.starter-yes {
+  background: rgba(111, 191, 115, 0.14);
+  color: var(--good);
+  border-color: rgba(111, 191, 115, 0.4);
+}
+
+.roster-starter-badge.starter-no {
+  background: rgba(169, 184, 172, 0.08);
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
 .roster-card-actions {
   display: flex;
   align-items: center;

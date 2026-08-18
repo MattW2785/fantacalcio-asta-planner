@@ -682,10 +682,15 @@
       entries.forEach(entry => {
         const card = document.createElement('div');
         card.className = 'roster-card';
+        const starterKey = (entry.player.n.trim() + '|' + entry.player.s.trim()).toLowerCase();
+        const isStarter = activeStartersMap()[starterKey];
+        const starterBadge = isStarter
+          ? `<span class="roster-starter-badge starter-yes" title="${escapeHtml(startersTitle())}">● Titolare</span>`
+          : `<span class="roster-starter-badge starter-no" title="Non risulta tra i probabili titolari salvati">○ Non titolare</span>`;
         card.innerHTML = `
           <div class="roster-card-info">
             <div class="roster-card-name">${escapeHtml(entry.player.n)}${entry.synced ? '<span class="synced-badge" title="Aggiunto automaticamente da Asta Live">Sync</span>' : ''}</div>
-            <div class="roster-card-team">${escapeHtml(entry.player.s)}</div>
+            <div class="roster-card-team">${escapeHtml(entry.player.s)} ${starterBadge}</div>
           </div>
           <div class="roster-card-actions">
             <input type="number" class="price-input" min="0" step="1" value="${entry.pricePaid}" data-price-id="${entry.id}">
@@ -1933,6 +1938,7 @@
   function refreshAfterTitolariChange() {
     renderTitolariImportStatus();
     renderTable();
+    renderRoster();
   }
 
   // ---- Revisione dopo l'import PDF: una card per squadra, con salvataggio indipendente ----
