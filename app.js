@@ -9,6 +9,10 @@
   const TOTAL_SLOTS = Object.values(SLOTS_PER_ROLE).reduce((a, b) => a + b, 0); // 25
   const STORAGE_KEY = 'fanta_asta_planner_v1';
   const SYNC_POLL_INTERVAL_MS = 2000;
+  // Meno frequente del poll "mia rosa": interroga il roster di OGNI squadra della stanza per
+  // sapere chi è già stato venduto altrove, quindi genera N richieste per giro invece di una
+  // sola — non serve la stessa reattività di 2s per questo, e così si va più leggeri sul server.
+  const ROOM_SOLD_POLL_INTERVAL_MS = 8000;
 
   const DEFAULT_SETTINGS = {
     budgetTotale: 400,
@@ -28,7 +32,13 @@
     lastError: null,
     // Chiavi (nome|squadra) di giocatori sincronizzati che l'utente ha rimosso a mano dalla
     // rosa: non vanno ri-aggiunti automaticamente al prossimo poll.
-    ignoreKeys: []
+    ignoreKeys: [],
+    // Disponibilità dell'intero listone: chiave "nome|squadra" -> nome della squadra che lo ha
+    // acquistato, aggregando il roster di TUTTE le squadre della stanza (non solo la propria).
+    soldByTeam: {},
+    soldTeamsOk: 0,
+    soldTeamsTotal: 0,
+    soldLastSyncedAt: null
   };
 
   // Strategie di allocazione budget consigliate, selezionabili nel pannello impostazioni.
@@ -63,6 +73,7 @@
   let searchTerm = '';
   let sortKey = 'qa';
   let sortDir = 'desc';
+  let hideSold = true; // nasconde dal Listone i giocatori già acquistati da qualsiasi squadra della stanza
 
   let playersById = new Map();
   // Giocatori realmente acquistabili (non off-limits) per ruolo, ordinati per quotazione decrescente:
@@ -510,9 +521,30 @@
     `;
   }
 
+  // Mostra/nasconde il toggle "Nascondi venduti" e il relativo stato solo quando collegati a
+  // una stanza Asta Live (altrimenti non c'è alcun dato "venduto" da mostrare/nascondere).
+  function renderSoldSyncStatus() {
+    const wrap = document.getElementById('hide-sold-wrap');
+    const hint = document.getElementById('sold-sync-hint');
+    const linked = !!sync.teamId;
+    wrap.hidden = !linked;
+    hint.hidden = !linked;
+    if (!linked) return;
+
+    const ok = sync.soldTeamsOk || 0;
+    const total = sync.soldTeamsTotal || 0;
+    const when = sync.soldLastSyncedAt ? new Date(sync.soldLastSyncedAt).toLocaleTimeString('it-IT') : 'mai';
+    let text = `Disponibilità listone: ${ok}/${total || '?'} squadre della stanza sincronizzate (ultimo controllo ${when}).`;
+    if (total > 0 && ok < total) {
+      text += ' Attiva la sincronizzazione anche per le altre squadre da Asta Live per un quadro completo.';
+    }
+    hint.textContent = text;
+  }
+
   // ---------- Rendering: Players table ----------
   function renderTable() {
     renderRoleSpendStrip();
+    renderSoldSyncStatus();
 
     const tbody = document.getElementById('players-tbody');
     tbody.innerHTML = '';
@@ -522,6 +554,10 @@
     if (searchTerm.trim()) {
       const q = searchTerm.trim().toLowerCase();
       list = list.filter(p => p.n.toLowerCase().includes(q) || p.s.toLowerCase().includes(q));
+    }
+
+    if (hideSold) {
+      list = list.filter(p => !isSoldElsewhere(p));
     }
 
     list = list.slice().sort((a, b) => {
@@ -570,11 +606,18 @@
         : '<span class="hint">—</span>';
 
       if (p.excl) tr.classList.add('excluded');
+      const soldTeam = sync.soldByTeam ? sync.soldByTeam[normalizeMatchKey(p.n, p.s)] : null;
+      const isSold = isSoldElsewhere(p);
+      if (isSold) tr.classList.add('sold-elsewhere');
+      const soldBadge = isSold
+        ? ` <span class="excl-badge sold-badge" title="Già acquistato da ${escapeHtml(soldTeam)} su Asta Live">venduto</span>`
+        : '';
 
       const slotFull = counts[p.r] >= SLOTS_PER_ROLE[p.r];
-      const disableAdd = p.excl || inRoster || slotFull;
+      const disableAdd = p.excl || inRoster || slotFull || isSold;
       let addLabel = 'Aggiungi';
       if (inRoster) addLabel = 'In rosa';
+      else if (isSold) addLabel = 'Venduto';
       else if (p.excl) addLabel = 'Non acq.';
       else if (slotFull) addLabel = 'Slot pieno';
 
@@ -585,7 +628,7 @@
         : '';
 
       tr.innerHTML = `
-        <td class="player-name">${starterMark}${escapeHtml(p.n)}${p.excl ? ' <span class="excl-badge" title="Tra i 5 giocatori più quotati del ruolo: non acquistabile per regola di lega (off-limits)">off-limits</span>' : ''}</td>
+        <td class="player-name">${starterMark}${escapeHtml(p.n)}${p.excl ? ' <span class="excl-badge" title="Tra i 5 giocatori più quotati del ruolo: non acquistabile per regola di lega (off-limits)">off-limits</span>' : ''}${soldBadge}</td>
         <td>${escapeHtml(p.s)}</td>
         <td class="mono-cell">${p.qa}</td>
         <td class="mono-cell">${p.fvm}</td>
@@ -1099,6 +1142,11 @@
       renderTable();
     });
 
+    document.getElementById('hide-sold-toggle').addEventListener('change', e => {
+      hideSold = e.target.checked;
+      renderTable();
+    });
+
     document.querySelectorAll('#players-table th.sortable').forEach(th => {
       th.addEventListener('click', () => {
         const key = th.dataset.sort;
@@ -1174,6 +1222,7 @@
       clearInterval(syncTimer);
       syncTimer = null;
     }
+    stopRoomSoldPolling();
   }
 
   function startPolling() {
@@ -1181,6 +1230,7 @@
     if (!sync.teamId) return;
     syncTick();
     syncTimer = setInterval(syncTick, SYNC_POLL_INTERVAL_MS);
+    startRoomSoldPolling();
   }
 
   async function syncTick() {
@@ -1224,6 +1274,77 @@
     } finally {
       syncTickInFlight = false;
     }
+  }
+
+  // ---- Disponibilità dell'intero listone: chi è già stato acquistato da QUALSIASI squadra
+  // della stanza (non solo la propria), per nascondere/segnare quei giocatori nel Listone. Un
+  // giro interroga il roster di ogni squadra della stanza: se l'admin non ha attivato la
+  // sincronizzazione per una squadra, quella specifica richiesta risponde 403/404 e viene
+  // saltata (non blocca le altre) — il conteggio "squadre sincronizzate" in UI riflette quante
+  // hanno risposto, così si capisce subito se mancano attivazioni.
+  let roomSoldTimer = null;
+  let roomSoldTickInFlight = false;
+
+  function stopRoomSoldPolling() {
+    if (roomSoldTimer) {
+      clearInterval(roomSoldTimer);
+      roomSoldTimer = null;
+    }
+  }
+
+  function startRoomSoldPolling() {
+    stopRoomSoldPolling();
+    if (!sync.roomCode) return;
+    roomSoldTick();
+    roomSoldTimer = setInterval(roomSoldTick, ROOM_SOLD_POLL_INTERVAL_MS);
+  }
+
+  async function roomSoldTick() {
+    if (!sync.roomCode || roomSoldTickInFlight) return;
+    roomSoldTickInFlight = true;
+    try {
+      const teamsRes = await fetch(`${syncBaseUrl()}/api/rooms/${encodeURIComponent(sync.roomCode)}/sync/teams`);
+      if (!teamsRes.ok) return;
+      const teamsData = await teamsRes.json();
+      const teams = teamsData.teams || [];
+
+      const soldByTeam = {};
+      let okCount = 0;
+
+      await Promise.all(teams.map(async t => {
+        try {
+          const res = await fetch(`${syncBaseUrl()}/api/rooms/${encodeURIComponent(sync.roomCode)}/sync/roster?participantId=${encodeURIComponent(t.id)}`);
+          if (!res.ok) return; // 403/404: sync non attiva per questa squadra, si salta senza bloccare le altre
+          const data = await res.json();
+          okCount++;
+          const teamLabel = data.teamName || t.name || 'altra squadra';
+          (data.players || []).forEach(p => {
+            soldByTeam[normalizeMatchKey(p.name, p.realTeam)] = teamLabel;
+          });
+        } catch (e) { /* rete assente per questa squadra, si riprova al prossimo giro */ }
+      }));
+
+      sync.soldByTeam = soldByTeam;
+      sync.soldTeamsOk = okCount;
+      sync.soldTeamsTotal = teams.length;
+      sync.soldLastSyncedAt = new Date().toISOString();
+      saveState();
+      renderTable();
+    } catch (e) {
+      // stanza/rete irraggiungibile: si riprova al prossimo giro, nessun errore bloccante
+      // (a differenza del poll della propria rosa, qui non è critico perdere un ciclo)
+    } finally {
+      roomSoldTickInFlight = false;
+    }
+  }
+
+  // true se il giocatore risulta acquistato da un'ALTRA squadra della stanza (non la propria:
+  // quelli restano gestiti dal flusso "La mia rosa" esistente, niente doppia etichetta).
+  function isSoldElsewhere(p) {
+    if (!sync.soldByTeam) return false;
+    const team = sync.soldByTeam[normalizeMatchKey(p.n, p.s)];
+    if (!team) return false;
+    return !roster.some(r => r.id === p.id);
   }
 
   async function findSyncTeams() {

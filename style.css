@@ -756,6 +756,14 @@ body.no-players #players-data-area { display: none; }
 
 .players-table tbody tr.excluded { opacity: 0.55; }
 
+.players-table tbody tr.sold-elsewhere { opacity: 0.5; }
+
+.sold-badge {
+  background: rgba(169, 184, 172, 0.14);
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
 .player-name { font-weight: 600; }
 
 .mono-cell {
