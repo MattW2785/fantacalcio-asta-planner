@@ -2189,10 +2189,49 @@
     });
   }
 
-  // ---------- Sticky header offset (for anchor-scroll targets) ----------
-  function updateHeaderOffset() {
-    const header = document.getElementById('scoreboard');
-    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+  // ---------- Navigazione a schede: il contenitore principale mostra sempre e solo il pannello
+  // corrispondente al pulsante del menu attivo, invece di scorrere tra tutti quanti in sequenza.
+  const PANEL_IDS = ['sync-panel', 'settings-panel', 'players-panel', 'titolari-panel', 'roster-panel'];
+  const ACTIVE_PANEL_STORAGE_KEY = 'fanta_asta_active_panel';
+
+  function showPanel(id) {
+    if (!PANEL_IDS.includes(id)) return;
+    PANEL_IDS.forEach(pid => {
+      document.getElementById(pid).hidden = pid !== id;
+    });
+    document.querySelectorAll('.quick-nav-link').forEach(link => {
+      link.classList.toggle('active', link.getAttribute('href') === `#${id}`);
+    });
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    try { localStorage.setItem(ACTIVE_PANEL_STORAGE_KEY, id); } catch (e) { /* storage non disponibile, pazienza */ }
+  }
+
+  function wirePanelNav() {
+    // Un solo listener delegato copre sia i pulsanti del menu sia i link interni che rimandano
+    // a un altro pannello (es. "vedi pannello Probabili titolari" nel Listone).
+    document.addEventListener('click', e => {
+      const link = e.target.closest('a[href^="#"]');
+      if (!link) return;
+      const id = link.getAttribute('href').slice(1);
+      if (!PANEL_IDS.includes(id)) return;
+      e.preventDefault();
+      showPanel(id);
+    });
+
+    window.addEventListener('hashchange', () => {
+      const id = location.hash.slice(1);
+      if (PANEL_IDS.includes(id)) showPanel(id);
+    });
+  }
+
+  function initialPanelId() {
+    const fromHash = location.hash.slice(1);
+    if (PANEL_IDS.includes(fromHash)) return fromHash;
+    try {
+      const saved = localStorage.getItem(ACTIVE_PANEL_STORAGE_KEY);
+      if (PANEL_IDS.includes(saved)) return saved;
+    } catch (e) { /* storage non disponibile, si usa il default */ }
+    return 'players-panel';
   }
 
   // ---------- Init ----------
@@ -2203,9 +2242,9 @@
     wireStatsImport();
     wireSync();
     wireTitolariPanel();
+    wirePanelNav();
     renderAll();
-    updateHeaderOffset();
-    window.addEventListener('resize', updateHeaderOffset);
+    showPanel(initialPanelId());
     if (sync.teamId) startPolling();
   }
 

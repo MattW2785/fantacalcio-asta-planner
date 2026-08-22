@@ -70,14 +70,6 @@ html {
   html { scroll-behavior: auto; }
 }
 
-:root {
-  --header-h: 180px;
-}
-
-#settings-panel, #players-panel, #roster-panel {
-  scroll-margin-top: calc(var(--header-h) + 1rem);
-}
-
 body {
   display: flex;
   flex-direction: column;
@@ -196,6 +188,7 @@ a { color: var(--gold); }
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  justify-content: center;
   margin-top: 0.65rem;
   padding-top: 0.65rem;
   border-top: 1px solid var(--border);
@@ -211,7 +204,8 @@ a { color: var(--gold); }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.35rem 0.8rem;
-  transition: border-color 0.15s ease, color 0.15s ease, filter 0.15s ease;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease, filter 0.15s ease;
 }
 
 .quick-nav-link:hover {
@@ -219,14 +213,14 @@ a { color: var(--gold); }
   border-color: var(--gold);
 }
 
-.quick-nav-link.quick-nav-highlight {
+.quick-nav-link.active {
   color: #0B2118;
-  background: var(--good);
-  border-color: var(--good);
+  background: var(--gold);
+  border-color: var(--gold);
   font-weight: 600;
 }
 
-.quick-nav-link.quick-nav-highlight:hover {
+.quick-nav-link.active:hover {
   filter: brightness(1.08);
 }
 
