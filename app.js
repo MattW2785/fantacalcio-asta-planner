@@ -722,6 +722,20 @@
     });
 
     container.querySelectorAll('[data-price-id]').forEach(input => {
+      // "input" aggiorna il budget rimanente MENTRE si scrive, senza aspettare che il campo
+      // perda il focus: tocca solo le cifre in alto (renderDashboard/renderRoleSpendStrip),
+      // mai renderRoster/renderAll, altrimenti l'input verrebbe ricreato e perderebbe il focus
+      // a metà digitazione. Il salvataggio vero e proprio (validazione + localStorage) resta
+      // sul "change", invariato: qui è solo un'anteprima immediata, non una conferma.
+      input.addEventListener('input', () => {
+        const id = Number(input.dataset.priceId);
+        const entry = roster.find(r => r.id === id);
+        if (!entry) return;
+        entry.pricePaid = Math.max(0, Math.round(Number(input.value) || 0));
+        renderDashboard();
+        renderRoleSpendStrip();
+      });
+
       input.addEventListener('change', () => {
         const id = Number(input.dataset.priceId);
         const newPrice = Math.max(0, Math.round(Number(input.value) || 0));
