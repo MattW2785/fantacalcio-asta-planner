@@ -78,6 +78,7 @@
   let sortKey = 'qa';
   let sortDir = 'desc';
   let hideSold = true; // nasconde dal Listone i giocatori già acquistati da qualsiasi squadra della stanza
+  let showOnlyRoster = false; // filtra il Listone ai soli giocatori già in "La mia rosa"
 
   let playersById = new Map();
   // Giocatori realmente acquistabili (non off-limits) per ruolo, ordinati per quotazione decrescente:
@@ -570,6 +571,8 @@
     const tbody = document.getElementById('players-tbody');
     tbody.innerHTML = '';
 
+    const rosterIds = new Set(roster.map(r => r.id));
+
     let list = PLAYERS_DATA.filter(p => p.r === activeRole);
 
     if (searchTerm.trim()) {
@@ -579,6 +582,10 @@
 
     if (hideSold) {
       list = list.filter(p => !isSoldElsewhere(p));
+    }
+
+    if (showOnlyRoster) {
+      list = list.filter(p => rosterIds.has(p.id));
     }
 
     list = list.slice().sort((a, b) => {
@@ -599,13 +606,15 @@
       }
     });
 
-    const rosterIds = new Set(roster.map(r => r.id));
     const counts = filledCounts();
     const roleFactor = fattoreMercatoRuolo(activeRole);
 
     if (list.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="9" class="no-results">Nessun giocatore trovato.</td>`;
+      const msg = showOnlyRoster
+        ? `Nessun ${ROLE_LABELS[activeRole].toLowerCase()} nella tua rosa.`
+        : 'Nessun giocatore trovato.';
+      tr.innerHTML = `<td colspan="9" class="no-results">${msg}</td>`;
       tbody.appendChild(tr);
       return;
     }
@@ -1344,6 +1353,11 @@
 
     document.getElementById('search-input').addEventListener('input', e => {
       searchTerm = e.target.value;
+      renderTable();
+    });
+
+    document.getElementById('only-roster-toggle').addEventListener('change', e => {
+      showOnlyRoster = e.target.checked;
       renderTable();
     });
 

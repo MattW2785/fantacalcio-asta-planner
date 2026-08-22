@@ -222,6 +222,10 @@ if ("serviceWorker" in navigator) {
           <button class="role-tab" data-role="A">Attaccanti</button>
         </div>
         <input type="search" id="search-input" class="search-input" placeholder="Cerca per nome o squadra&hellip;">
+        <label class="titolari-checkbox-item">
+          <input type="checkbox" id="only-roster-toggle">
+          <span>Solo la mia rosa</span>
+        </label>
         <label class="titolari-checkbox-item" id="hide-sold-wrap" hidden>
           <input type="checkbox" id="hide-sold-toggle" checked>
           <span>Nascondi venduti</span>
@@ -349,6 +353,6 @@ if ("serviceWorker" in navigator) {
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/tesseract.min.js"></script>
-<script src="app.js?v=20260818-4"></script>
+<script src="app.js?v=20260818-5"></script>
 </body>
 </html>
