@@ -69,6 +69,10 @@
   // Probabili titolari importati da PDF (vedi sezione dedicata più sotto): quando presente,
   // sostituisce integralmente il fallback statico LIKELY_STARTERS di starters.js.
   let titolariImport = initial.titolariImport; // { entries:[{id,n,s,r}], meta:{...} } | null
+  // Archivio di "fotografie" della rosa salvate a mano dall'utente (nome/data + elenco
+  // giocatori con prezzo pagato), indipendenti dalla rosa live: restano intatte anche se poi
+  // si svuota o si modifica "La mia rosa". Usate per l'export PDF e per confrontare versioni.
+  let savedFormations = initial.savedFormations; // [{id, name, savedAt, budgetTotale, entries:[{n,s,r,pricePaid}]}]
   let activeRole = 'P';
   let searchTerm = '';
   let sortKey = 'qa';
@@ -119,7 +123,7 @@
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, stats: [], statsMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
+      if (!raw) return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, stats: [], statsMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null, savedFormations: [] };
       const parsed = JSON.parse(raw);
       return {
         settings: { ...DEFAULT_SETTINGS, ...parsed.settings, pct: { ...DEFAULT_SETTINGS.pct, ...(parsed.settings && parsed.settings.pct) } },
@@ -133,15 +137,16 @@
           ...(parsed.sync || {}),
           ignoreKeys: Array.isArray(parsed.sync && parsed.sync.ignoreKeys) ? parsed.sync.ignoreKeys : []
         },
-        titolariImport: (parsed.titolariImport && Array.isArray(parsed.titolariImport.entries)) ? parsed.titolariImport : null
+        titolariImport: (parsed.titolariImport && Array.isArray(parsed.titolariImport.entries)) ? parsed.titolariImport : null,
+        savedFormations: Array.isArray(parsed.savedFormations) ? parsed.savedFormations : []
       };
     } catch (e) {
-      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, stats: [], statsMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null };
+      return { settings: { ...DEFAULT_SETTINGS, pct: { ...DEFAULT_SETTINGS.pct } }, roster: [], players: [], playersMeta: null, stats: [], statsMeta: null, sync: { ...DEFAULT_SYNC }, titolariImport: null, savedFormations: [] };
     }
   }
 
   function saveState() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta, stats: STATS_DATA, statsMeta, sync, titolariImport }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, roster, players: PLAYERS_DATA, playersMeta, stats: STATS_DATA, statsMeta, sync, titolariImport, savedFormations }));
   }
 
   // ---------- Derived calculations ----------
@@ -732,6 +737,170 @@
     });
   }
 
+  // ---------- Archivio formazioni salvate + esportazione PDF ----------
+  // Le formazioni salvate sono "fotografie" indipendenti (nome/squadra/ruolo/prezzo pagato,
+  // non gli Id del listone): restano intatte anche se poi si svuota la rosa o si ricarica un
+  // listone diverso. L'export PDF usa la stampa nativa del browser (nessuna libreria nuova):
+  // si popola un contenitore dedicato e nascosto, poi window.print() — su desktop il dialogo
+  // di stampa permette "Salva come PDF", su iOS Safari lo stesso via Condividi > Stampa.
+
+  function nextFormationId() {
+    let id = Date.now();
+    while (savedFormations.some(f => f.id === id)) id++;
+    return id;
+  }
+
+  function totalSpesoEntries(entries) {
+    return entries.reduce((sum, e) => sum + (Number(e.pricePaid) || 0), 0);
+  }
+
+  async function saveCurrentFormation() {
+    if (roster.length === 0) {
+      showToast('La rosa è vuota: aggiungi almeno un giocatore prima di salvare.', 'error');
+      return;
+    }
+    const entries = roster.map(r => {
+      const p = playersById.get(r.id);
+      return p ? { n: p.n, s: p.s, r: p.r, pricePaid: Number(r.pricePaid) || 0 } : null;
+    }).filter(Boolean);
+
+    const now = new Date();
+    const name = `Formazione ${now.toLocaleDateString('it-IT')} ${now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}`;
+    savedFormations.push({ id: nextFormationId(), name, savedAt: now.toISOString(), budgetTotale: settings.budgetTotale, entries });
+    saveState();
+    renderFormationsArchive();
+    showToast(`Formazione salvata nell'archivio: "${name}".`);
+  }
+
+  function startRenameFormation(id, el) {
+    const f = savedFormations.find(x => x.id === id);
+    if (!f) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = f.name;
+    input.className = 'mono-input formation-name-input';
+    input.setAttribute('aria-label', 'Rinomina formazione');
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      const newName = input.value.trim();
+      if (newName) f.name = newName;
+      saveState();
+      renderFormationsArchive();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') input.blur();
+      if (e.key === 'Escape') { committed = true; renderFormationsArchive(); }
+    });
+  }
+
+  async function deleteFormation(id) {
+    const f = savedFormations.find(x => x.id === id);
+    if (!f) return;
+    if (!(await showConfirm(`Eliminare la formazione "${f.name}"? Non si può annullare.`))) return;
+    savedFormations = savedFormations.filter(x => x.id !== id);
+    saveState();
+    renderFormationsArchive();
+    showToast('Formazione eliminata dall\'archivio.');
+  }
+
+  function buildPrintFormationHtml(name, savedAtIso, entries, budgetTotale) {
+    const grouped = { P: [], D: [], C: [], A: [] };
+    entries.forEach(e => { if (grouped[e.r]) grouped[e.r].push(e); });
+    ROLES.forEach(role => grouped[role].sort((a, b) => (b.pricePaid || 0) - (a.pricePaid || 0)));
+
+    const totalSpeso = totalSpesoEntries(entries);
+    const dateLabel = new Date(savedAtIso).toLocaleString('it-IT');
+
+    const roleSection = role => `
+      <div class="print-role-group">
+        <h3>${ROLE_LABELS_PLURAL[role]} <span>(${grouped[role].length})</span></h3>
+        <table>
+          <thead><tr><th>Nome</th><th>Squadra</th><th>Prezzo</th></tr></thead>
+          <tbody>
+            ${grouped[role].map(e => `<tr><td>${escapeHtml(e.n)}</td><td>${escapeHtml(e.s)}</td><td>${e.pricePaid || 0} FM</td></tr>`).join('')
+              || '<tr><td colspan="3">Nessun giocatore</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+
+    return `
+      <div class="print-header">
+        <div class="print-brand">FANTAASTA Planner</div>
+        <h1>${escapeHtml(name)}</h1>
+        <p>Salvata il ${dateLabel} &middot; Budget totale ${budgetTotale} FM &middot; Speso ${totalSpeso} FM &middot; ${entries.length}/${TOTAL_SLOTS} giocatori</p>
+      </div>
+      ${ROLES.map(roleSection).join('')}
+    `;
+  }
+
+  function exportFormationPdf(id) {
+    let name, savedAtIso, entries, budgetTotale;
+    if (id === 'current') {
+      if (roster.length === 0) {
+        showToast('La rosa è vuota: niente da esportare.', 'error');
+        return;
+      }
+      name = 'La mia rosa (attuale)';
+      savedAtIso = new Date().toISOString();
+      budgetTotale = settings.budgetTotale;
+      entries = roster.map(r => {
+        const p = playersById.get(r.id);
+        return p ? { n: p.n, s: p.s, r: p.r, pricePaid: Number(r.pricePaid) || 0 } : null;
+      }).filter(Boolean);
+    } else {
+      const f = savedFormations.find(x => x.id === id);
+      if (!f) return;
+      ({ name, entries, budgetTotale } = f);
+      savedAtIso = f.savedAt;
+    }
+    document.getElementById('print-formation').innerHTML = buildPrintFormationHtml(name, savedAtIso, entries, budgetTotale);
+    window.print();
+  }
+
+  function renderFormationsArchive() {
+    const listEl = document.getElementById('formations-list');
+    const emptyEl = document.getElementById('formations-empty-state');
+    if (!listEl || !emptyEl) return;
+    emptyEl.hidden = savedFormations.length > 0;
+
+    listEl.innerHTML = savedFormations
+      .slice()
+      .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt))
+      .map(f => `
+        <div class="formation-card">
+          <div class="formation-card-header">
+            <span class="formation-name" data-edit-name="${f.id}" title="Clicca per rinominare">${escapeHtml(f.name)}</span>
+          </div>
+          <div class="formation-card-meta">${new Date(f.savedAt).toLocaleString('it-IT')} &middot; ${f.entries.length}/${TOTAL_SLOTS} giocatori &middot; ${totalSpesoEntries(f.entries)} FM spesi</div>
+          <div class="formation-card-actions">
+            <button type="button" class="btn" data-export-formation="${f.id}">Esporta PDF</button>
+            <button type="button" class="btn btn-remove" data-delete-formation="${f.id}">Elimina</button>
+          </div>
+        </div>
+      `).join('');
+  }
+
+  function wireFormationsArchive() {
+    document.getElementById('btn-save-formation').addEventListener('click', saveCurrentFormation);
+    document.getElementById('btn-export-current-pdf').addEventListener('click', () => exportFormationPdf('current'));
+
+    document.getElementById('formations-list').addEventListener('click', e => {
+      const nameEl = e.target.closest('[data-edit-name]');
+      if (nameEl) { startRenameFormation(Number(nameEl.dataset.editName), nameEl); return; }
+      const exportBtn = e.target.closest('[data-export-formation]');
+      if (exportBtn) { exportFormationPdf(Number(exportBtn.dataset.exportFormation)); return; }
+      const delBtn = e.target.closest('[data-delete-formation]');
+      if (delBtn) { deleteFormation(Number(delBtn.dataset.deleteFormation)); return; }
+    });
+  }
+
   // ---------- Full render ----------
   function renderAll() {
     document.body.classList.toggle('no-players', PLAYERS_DATA.length === 0);
@@ -741,6 +910,7 @@
     renderSettings();
     renderTable();
     renderRoster();
+    renderFormationsArchive();
     renderSyncPanel();
     renderTitolariImportStatus();
     renderTitolariReview();
@@ -2242,6 +2412,7 @@
     wireStatsImport();
     wireSync();
     wireTitolariPanel();
+    wireFormationsArchive();
     wirePanelNav();
     renderAll();
     showPanel(initialPanelId());

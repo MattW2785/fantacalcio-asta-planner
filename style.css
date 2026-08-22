@@ -1131,6 +1131,103 @@ body.no-players #players-data-area { display: none; }
   justify-content: center;
 }
 
+.roster-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+/* ---------- Archivio formazioni ---------- */
+.formations-archive {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.formations-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.formation-card {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 0.9rem;
+  transition: border-color 0.15s ease;
+}
+
+.formation-card:hover { border-color: var(--text-secondary); }
+
+.formation-card-header { margin-bottom: 0.3rem; }
+
+.formation-name {
+  font-weight: 600;
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+}
+
+.formation-name:hover {
+  border-bottom-color: var(--text-secondary);
+}
+
+.formation-name-input {
+  width: 100%;
+  font-weight: 600;
+}
+
+.formation-card-meta {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.formation-card-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* ---------- Esportazione PDF (stampa nativa del browser) ---------- */
+.print-formation { display: none; }
+
+@media print {
+  body * { visibility: hidden; }
+  #print-formation, #print-formation * { visibility: visible; }
+  #print-formation {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    background: #fff;
+    color: #111;
+    font-family: Arial, Helvetica, sans-serif;
+    padding: 1.5rem;
+  }
+  .print-brand {
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #666;
+  }
+  .print-header h1 { margin: 0.2rem 0 0.4rem; font-size: 1.4rem; }
+  .print-header p { margin: 0 0 1.25rem; color: #444; font-size: 0.85rem; }
+  .print-role-group { margin-bottom: 1rem; break-inside: avoid; }
+  .print-role-group h3 { font-size: 1rem; margin: 0 0 0.35rem; }
+  .print-role-group h3 span { color: #666; font-weight: 400; }
+  .print-role-group table { width: 100%; border-collapse: collapse; }
+  .print-role-group th, .print-role-group td {
+    border: 1px solid #ccc;
+    padding: 4px 8px;
+    text-align: left;
+    font-size: 0.8rem;
+  }
+  .print-role-group th { background: #f0f0f0; }
+}
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed;
