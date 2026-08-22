@@ -490,15 +490,31 @@
       const emptySlots = SLOTS_PER_ROLE[role] - counts[role];
       const rimanente = rebalanced[role];
       const mediaSlot = emptySlots > 0 ? rimanente / emptySlots : 0;
+      const pctUsed = pianoIniziale > 0 ? Math.min(100, (speso / pianoIniziale) * 100) : 0;
+      const over = speso > pianoIniziale;
       const card = document.createElement('div');
       card.className = 'role-budget-card';
       card.innerHTML = `
-        <span class="role-tag role-${role}">${role}</span>
-        <span class="rb-figures">
-          <div>piano ${pianoIniziale.toFixed(0)} FM &middot; ~${avg.toFixed(1)}/slot</div>
-          <div class="rb-avg">fattore reparto: ${hasPlayers ? factor.toFixed(2) + 'x quot.' : '— (carica il listone)'}</div>
-          <div class="rb-avg">speso ${speso.toFixed(0)} &middot; ribilanciato <span class="${rimanente < 0 ? 'rb-over' : ''}">${rimanente.toFixed(0)}</span> FM${emptySlots > 0 ? ` (~${mediaSlot.toFixed(1)}/slot)` : ' (completo)'}</div>
-        </span>
+        <div class="rb-card-top">
+          <span class="role-tag role-${role}">${role}</span>
+          <span class="rb-role-label">${ROLE_LABELS_PLURAL[role]}</span>
+        </div>
+        <div class="rb-main-figures">
+          <div class="rb-main-figure">
+            <span class="rb-main-label">Budget piano</span>
+            <span class="rb-main-value">${pianoIniziale.toFixed(0)} <small>FM</small></span>
+          </div>
+          <div class="rb-main-figure">
+            <span class="rb-main-label">Speso</span>
+            <span class="rb-main-value${over ? ' rb-over' : ''}">${speso.toFixed(0)} <small>FM</small></span>
+          </div>
+        </div>
+        <div class="rb-bar-wrap"><div class="rb-bar-fill${over ? ' over' : ''}" style="width:${pctUsed}%"></div></div>
+        <div class="rb-details">
+          <span>~${avg.toFixed(1)} FM/slot</span>
+          <span>fattore reparto: ${hasPlayers ? factor.toFixed(2) + 'x quot.' : '— (carica il listone)'}</span>
+          <span>ribilanciato <span class="${rimanente < 0 ? 'rb-over' : ''}">${rimanente.toFixed(0)}</span> FM${emptySlots > 0 ? ` (~${mediaSlot.toFixed(1)}/slot)` : ' (completo)'}</span>
+        </div>
       `;
       container.appendChild(card);
     });

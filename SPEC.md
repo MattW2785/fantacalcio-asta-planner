@@ -71,6 +71,8 @@ Percentuali di default modificabili dall'utente (devono sempre sommare 100%). Il
 
 `creditiConsigliatiRuolo = percentuale * budgetTotale`, mostrare anche il prezzo medio per slot (`creditiConsigliatiRuolo / numeroSlotRuolo`, slot = 3/8/8/6). Restano comunque liberamente editabili dall'utente in qualsiasi momento.
 
+Nel pannello Impostazioni, ogni card ruolo mette in evidenza **Budget piano** e **Speso** come due cifre grandi affiancate (non solo testo piccolo tra gli altri dettagli), con una barra di avanzamento sotto (verde entro il piano, rossa se lo sfora — stesso linguaggio visivo di `.rss-bar-fill` nella striscia di spesa del Listone). I dettagli più tecnici (fattore reparto, budget "ribilanciato" — la disponibilità reale che tiene conto degli sfori sugli altri ruoli, vedi `computeRebalancedRoleTargets`) restano sotto, in testo più piccolo.
+
 ## Funzionalità richieste
 1. **Dashboard riepilogo** in alto: budget totale, speso finora, rimanente, slot rosa riempiti/totali per ruolo (3P/8D/8C/6A) — deve aggiornarsi live man mano che si aggiungono/rimuovono giocatori.
 2. **Pannello impostazioni**: budget totale, numero squadre, override fattore mercato, percentuali budget per ruolo (con validazione somma=100%).
