@@ -493,6 +493,7 @@
       const mediaSlot = emptySlots > 0 ? rimanente / emptySlots : 0;
       const pctUsed = pianoIniziale > 0 ? Math.min(100, (speso / pianoIniziale) * 100) : 0;
       const over = speso > pianoIniziale;
+      const cashflow = pianoIniziale - speso;
       const card = document.createElement('div');
       card.className = 'role-budget-card';
       card.innerHTML = `
@@ -508,6 +509,10 @@
           <div class="rb-main-figure">
             <span class="rb-main-label">Speso</span>
             <span class="rb-main-value${over ? ' rb-over' : ''}">${speso.toFixed(0)} <small>FM</small></span>
+          </div>
+          <div class="rb-main-figure">
+            <span class="rb-main-label">Cashflow</span>
+            <span class="rb-main-value ${cashflow < 0 ? 'rb-over' : 'rb-positive'}">${cashflow > 0 ? '+' : ''}${cashflow.toFixed(0)} <small>FM</small></span>
           </div>
         </div>
         <div class="rb-bar-wrap"><div class="rb-bar-fill${over ? ' over' : ''}" style="width:${pctUsed}%"></div></div>
